@@ -96,7 +96,7 @@ describe("Чтение транскрипта", function()
     local half = math.floor(#line / 2)
     fixtures.append_partial(path, line:sub(1, half))
     t.eq(
-      #data.read_dialogue(path),
+      #u.read_dialogue(path),
       14,
       "незаконченная строка не разбирается"
     )
@@ -126,7 +126,7 @@ describe("Реплики диалога", function()
       fixtures.queue_record(id, "dequeue"),
       fixtures.assistant_record(id, "answer"),
     })
-    t.eq(data.read_dialogue(path), {
+    t.eq(u.read_dialogue(path), {
       { role = "user", text = "question" },
       { role = "assistant", text = "answer" },
     })
@@ -136,7 +136,7 @@ describe("Реплики диалога", function()
     "реплики транскрипта владельца по порядку записи без служебных записей",
     function()
       u.fresh("owner-dialogue")
-      local replies = data.read_dialogue(fixtures.transcript("owner-dialogue"))
+      local replies = u.read_dialogue(fixtures.transcript("owner-dialogue"))
       t.eq(#replies, 14)
       t.eq(
         replies[1],
@@ -158,7 +158,7 @@ describe("Реплики диалога", function()
     "уведомления, вызовы и результаты инструментов не входят в диалог",
     function()
       u.fresh("command-completed")
-      local replies = data.read_dialogue(fixtures.transcript("command-completed"))
+      local replies = u.read_dialogue(fixtures.transcript("command-completed"))
       t.eq(#replies, 3)
       t.eq(replies[1].role, "user")
       t.match(replies[1].text, "^Using Bash")
@@ -169,7 +169,7 @@ describe("Реплики диалога", function()
 
   it("файла нет — недоступен", function()
     local dir = u.fresh()
-    local replies, err = data.read_dialogue(dir .. "/projects/x/none.jsonl")
+    local replies, err = u.read_dialogue(dir .. "/projects/x/none.jsonl")
     t.eq(replies, nil)
     t.eq(err, "unavailable")
   end)
@@ -181,7 +181,7 @@ describe("перечень сессий проекта", function()
     function()
       local dir = u.fresh("history-project")
       local project = dir .. "/projects/" .. fixtures.project
-      local list = data.list_sessions(project)
+      local list = u.list_sessions(project)
       t.eq(#list, 3)
       local ids = vim.tbl_map(function(s)
         return s.id
@@ -194,7 +194,7 @@ describe("перечень сессий проекта", function()
         list[1].mtime > list[2].mtime and list[2].mtime > list[3].mtime,
         "время последней записи"
       )
-      t.eq(data.list_sessions(dir .. "/projects/none"), {})
+      t.eq(u.list_sessions(dir .. "/projects/none"), {})
     end
   )
 end)

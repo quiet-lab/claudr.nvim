@@ -131,9 +131,12 @@ describe(
           path,
           { user, fixtures.assistant_record(id, "смотрите lua/foo.lua:4") }
         )
-        t.eq(data.session_cwd(path), project.dir)
+        t.eq(u.session_cwd(path), project.dir)
         local buf = require("claudr.history").open_dialogue({ id = id, path = path })
         t.ok(buf and refs.is_attached(buf))
+        t.wait(function()
+          return vim.b[buf].claudr_loaded == true
+        end, "конец чтения диалога")
         rs.cursor_on("foo")
         t.eq(refs.link_at_cursor(), { path = project.foo, line = 4 })
         rs.press("gd")

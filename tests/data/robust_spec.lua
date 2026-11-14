@@ -65,7 +65,7 @@ describe("Устойчивость к неизвестному", function()
     t.eq(a.description, "inner")
     t.eq(a.futureField, nil)
     h:close()
-    local replies = data.read_dialogue(fixtures.transcript("unknown-records"))
+    local replies = u.read_dialogue(fixtures.transcript("unknown-records"))
     t.eq(replies[1], { role = "user", text = "Remember the code word MANGO. Reply with just: ok" })
   end)
 
@@ -81,9 +81,9 @@ describe("Устойчивость к неизвестному", function()
       text:find('"future_attachment"', 1, true),
       "вложение неизвестного вида"
     )
-    local replies = data.read_dialogue(path)
+    local replies = u.read_dialogue(path)
     -- повреждённая строка и неизвестные записи пропущены, остальные реплики прочитаны
-    t.eq(replies, data.read_dialogue(fixtures.transcript("owner-dialogue")))
+    t.eq(replies, u.read_dialogue(fixtures.transcript("owner-dialogue")))
   end)
 
   it(
@@ -143,7 +143,7 @@ describe("Устойчивость к неизвестному", function()
         "running",
         "неизвестный статус уведомления пропущен"
       )
-      t.eq(#data.read_dialogue(path), 1)
+      t.eq(#u.read_dialogue(path), 1)
       h:close()
     end
   )
