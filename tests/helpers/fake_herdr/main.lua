@@ -7,6 +7,36 @@
 -- в `calls.jsonl`. Все ожидания — по событиям `vim.uv` (файловая система, ввод, сигналы),
 -- таймеров и опроса нет.
 local uv = vim.uv
+
+-- Завершение по сигналу. Neovim с самого запуска сам перехватывает SIGTERM и SIGHUP и ставит
+-- их в свою очередь событий; сигнал, пришедший до установки обработчиков ниже, попадает только
+-- туда. Поэтому обработчики ставятся первой же строкой и завершают процесс прямо из обратного
+-- вызова, раньше, чем Neovim обработает свою копию сигнала; сигнал, опередивший обработчики,
+-- Neovim обрабатывает сам (пишет в stderr «Caught deadly signal», выставляет `v:dying`)
+-- и вызывает VimLeavePre, где процесс завершается кодом SIGTERM (так же и опередивший SIGHUP).
+-- Выход по ошибке сценария `v:dying` не выставляет и свой код сохраняет. Цикл ожидания внизу —
+-- `vim.wait`: он обрабатывает очередь Neovim, а `uv.run` её не обрабатывает, и такой сигнал
+-- терялся.
+local cleanups = {}
+local function terminate(code)
+  for _, fn in ipairs(cleanups) do
+    pcall(fn)
+  end
+  os.exit(code)
+end
+local SIGNAL_CODES = { sigterm = 143, sigint = 130, sighup = 129 }
+for sig, code in pairs(SIGNAL_CODES) do
+  uv.new_signal():start(sig, function()
+    terminate(code)
+  end)
+end
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  callback = function()
+    if vim.v.dying > 0 then
+      terminate(SIGNAL_CODES.sigterm)
+    end
+  end,
+})
 local here = vim.fn.fnamemodify(arg[0], ":p:h")
 package.path = here .. "/../../?.lua;" .. package.path
 local json = require("helpers.herdr_double.json")
@@ -62,25 +92,13 @@ end
 
 append(ctl .. "/calls.jsonl", json.encode({ argv = args, pid = pid }) .. "\n")
 
--- Цикл событий: выполняется до вызова finish(); выход процесса — после цикла.
+-- Цикл событий: выполняется до вызова finish() или сигнала; выход процесса — после цикла.
 local exit_code
-local cleanups = {}
 local function finish(code)
   if exit_code == nil then
     exit_code = code
   end
 end
-
-local function on_signals(handler)
-  for _, sig in ipairs({ "sigterm", "sigint", "sighup" }) do
-    local h = uv.new_signal()
-    h:start(sig, function()
-      handler(sig)
-    end)
-  end
-end
-
-local SIGNAL_CODES = { sigterm = 143, sigint = 130, sighup = 129 }
 
 -- terminal session observe ---------------------------------------------------------------
 
@@ -134,9 +152,6 @@ local function observe(target)
   end)
   drain()
   -- Как настоящий клиент: ввод не читается, сам процесс не завершается, только по сигналу.
-  on_signals(function(sig)
-    finish(SIGNAL_CODES[sig])
-  end)
 end
 
 -- terminal attach ------------------------------------------------------------------------
@@ -260,10 +275,6 @@ local function attach(rest)
     end
     append(input_path, table.concat(got))
   end)
-
-  on_signals(function(sig)
-    finish(SIGNAL_CODES[sig])
-  end)
 end
 
 -- Разбор подкоманды ----------------------------------------------------------------------
@@ -280,10 +291,7 @@ else
   )
 end
 
-while exit_code == nil do
-  uv.run("once")
-end
-for _, fn in ipairs(cleanups) do
-  pcall(fn)
-end
-os.exit(exit_code)
+vim.wait(math.huge, function()
+  return exit_code ~= nil
+end)
+terminate(exit_code)

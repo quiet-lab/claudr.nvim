@@ -691,6 +691,94 @@ describe("поддельный herdr: terminal session observe", function()
       t.eq(d:calls()[1].argv, { "terminal", "session", "observe", "w1:p1" })
     end
   )
+
+  -- Запуск наблюдения с учётом вывода и выхода; `cmd` по умолчанию — поддельный `herdr`.
+  local function start_observe(cmd)
+    local p = { stdout = "", stderr = "" }
+    p.proc = vim.system(cmd or { "herdr", "terminal", "session", "observe", "w1:p1" }, {
+      stdout = function(_, data)
+        if data then
+          p.stdout = p.stdout .. data
+        end
+      end,
+      stderr = function(_, data)
+        if data then
+          p.stderr = p.stderr .. data
+        end
+      end,
+    }, function(r)
+      p.exited = r
+    end)
+    return p
+  end
+
+  local function wait_gone(p, msg)
+    t.wait(function()
+      return p.exited ~= nil
+    end, msg)
+    t.ok(uv.kill(p.proc.pid, 0) ~= 0, "процесс " .. p.proc.pid .. " жив")
+  end
+
+  it(
+    "SIGTERM сразу после запуска, до первого кадра, завершает наблюдение",
+    function()
+      -- Несколько процессов: сигнал приходит в разные моменты запуска Neovim и сценария.
+      -- Код выхода зависит от момента (сигнал во время запуска Neovim завершает его самого),
+      -- проверяется только выход.
+      local ps = {}
+      for i = 1, 8 do
+        ps[i] = start_observe()
+        ps[i].proc:kill("sigterm")
+      end
+      for i, p in ipairs(ps) do
+        wait_gone(p, "выход процесса " .. i)
+      end
+    end
+  )
+
+  it(
+    "SIGTERM сразу после первого кадра завершает наблюдение кодом 143",
+    function()
+      d:frame("w1:p1", "screen", { full = true })
+      local p = start_observe()
+      t.wait(function()
+        return p.stdout:find("\n", 1, true) ~= nil
+      end, "первый кадр")
+      p.proc:kill("sigterm")
+      wait_gone(p, "выход по сигналу")
+      t.eq(p.exited.code, 143)
+    end
+  )
+
+  it(
+    "SIGTERM, пришедший до установки обработчиков сигналов, завершает наблюдение кодом 143",
+    function()
+      -- Сигнал себе в начале сценария `nvim -l`, до кода поддельного `herdr`: Neovim ставит
+      -- его в свою очередь событий, обработчики `vim.uv` его уже не получат.
+      local main = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+        .. "/helpers/fake_herdr/main.lua"
+      local pre = vim.fn.tempname() .. ".lua"
+      vim.fn.writefile({
+        'vim.uv.kill(vim.uv.os_getpid(), "sigterm")',
+        "arg[0] = " .. vim.inspect(main),
+        "dofile(arg[0])",
+      }, pre)
+      local p = start_observe({
+        "nvim",
+        "--clean",
+        "--headless",
+        "-l",
+        pre,
+        "terminal",
+        "session",
+        "observe",
+        "w1:p1",
+      })
+      wait_gone(p, "выход по сигналу")
+      os.remove(pre)
+      t.eq(p.exited.code, 143)
+    end
+  )
 end)
 
 describe("поддельный herdr: terminal attach", function()
