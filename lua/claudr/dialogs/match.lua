@@ -45,6 +45,9 @@ local function new_watcher(key, session_id, agent_id)
     uses = {},
     by_id = {}, -- идентификатор вызова → вызов
     reqs = {}, -- запросы наблюдателя по порядку приёма
+    reading = false, -- идёт чтение транскрипта
+    again = false, -- после чтения нужно ещё одно
+    waiters = {}, -- обработчики конца чтения (запросы, входящие в наблюдатель)
   }, W)
 end
 
@@ -138,15 +141,54 @@ function W:ingest(events)
   end
 end
 
-function W:pump()
-  if self.closed or not self.tail then
+-- Чтение новых записей транскрипта асинхронное, порциями, по одному за раз (`reading`);
+-- вызов во время чтения заказывает ещё одно чтение после него. `cb()` — когда прочитано
+-- всё, что было записано к моменту вызова (сразу, если транскрипт ещё не найден: читать
+-- нечего). Закрытый наблюдатель `cb` не вызывает.
+function W:pump(cb)
+  if self.closed then
     return
   end
-  local lines = fs.read_lines(self.tail)
-  if lines and #lines > 0 then
-    self:ingest(hook.events(lines))
-    self:assign()
+  if not self.tail then
+    if cb then
+      cb()
+    end
+    return
   end
+  if cb then
+    self.waiters[#self.waiters + 1] = cb
+  end
+  if self.reading then
+    self.again = true
+    return
+  end
+  self.reading, self.again = true, false
+  fs.read_lines_async(self.tail, function(text)
+    local lines = {}
+    for line in text:gmatch("([^\n]*)\n") do
+      if line ~= "" then
+        lines[#lines + 1] = line
+      end
+    end
+    local events = hook.events(lines)
+    if #events > 0 then
+      self:ingest(events)
+      self:assign()
+    end
+  end, function()
+    self.reading = false
+    if self.again then
+      self:pump()
+      return
+    end
+    local waiters = self.waiters
+    self.waiters = {}
+    for _, f in ipairs(waiters) do
+      f()
+    end
+  end, function()
+    return self.closed
+  end)
 end
 
 -- Наблюдение за файлом транскрипта: каталог файла (уведомления по имени файла).
@@ -227,11 +269,16 @@ function M.track(req, cb)
   if fresh then
     w:locate()
   end
-  -- уже записанное учитывается до отметки приёма: результаты прежних вызовов не подходят
-  w:pump()
-  t.since = w.n
-  t.joining = nil
-  w:assign()
+  -- уже записанное учитывается до отметки приёма: результаты прежних вызовов не подходят;
+  -- чтение асинхронное, отметка ставится по его концу
+  w:pump(function()
+    if tracked[req] ~= t then
+      return
+    end
+    t.since = w.n
+    t.joining = nil
+    w:assign()
+  end)
 end
 
 --- Прекращает сопоставление запроса; наблюдатель без запросов снимается.
@@ -251,6 +298,13 @@ function M.untrack(req)
   if #w.reqs == 0 then
     w:close()
   end
+end
+
+-- Только для тестов: запрос принят наблюдателем (записанное к приёму прочитано, отметка
+-- приёма поставлена) либо не сопоставляется.
+function M._joined(req)
+  local t = tracked[req]
+  return t == nil or t.joining == nil
 end
 
 -- Только для тестов: число наблюдателей транскриптов.
