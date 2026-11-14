@@ -363,12 +363,41 @@ describe("Агент не готов", function()
       return d:count("pane.send_keys") == 1
     end, "pane.send_keys")
     t.eq(d:last("pane.send_keys").params.keys, { "down", "enter" })
+    t.eq(ms.noted(rec, "агент в панели " .. result.pane_id .. " готов"), false)
     d:set_agent_status(result.pane_id, "idle")
     s.wait_node(result.pane_id, function(n)
       return n.state == "idle"
     end, "узел панели показывает idle по событию")
+    t.wait(function()
+      return ms.noted(rec, "агент в панели " .. result.pane_id .. " готов")
+    end, "сообщение «готов» после ответа на диалог")
     t.eq(d:count("agent.start"), 1)
+    -- после «готов» слежение снято: новые смены состояния сообщений не дают
+    local n = #rec.notes
+    d:set_agent_status(result.pane_id, "blocked")
+    s.wait_node(result.pane_id, function(node)
+      return node.state == "blocked"
+    end, "узел blocked")
+    t.eq(#rec.notes, n, "новых сообщений нет")
   end)
+
+  it(
+    "Панель закрыта до готовности: после сообщения «не готов»",
+    function()
+      local d = env()
+      local rec = ms.stub({})
+      d:set_start_status("blocked")
+      local _, result = run({ node = model.get("w1"), mode = "tab" })
+      t.wait(function()
+        return ms.noted(rec, "не готов")
+      end, "сообщение «не готов»")
+      d:pane_exited(result.pane_id, { vanish = true })
+      t.wait(function()
+        return ms.noted(rec, "закрыта", vim.log.levels.WARN)
+      end, "сообщение о закрытой панели")
+      t.eq(ms.noted(rec, "агент в панели " .. result.pane_id .. " готов"), false)
+    end
+  )
 
   it("Сервер ответил agent_not_ready", function()
     local d = env()

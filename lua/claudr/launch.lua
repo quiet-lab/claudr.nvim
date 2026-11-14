@@ -67,11 +67,11 @@ local READY_HINT = "ответьте на диалог подключением 
   .. "или клавишами (:Claudr keys, клавиша K в дереве); повторный запуск не выполняется"
 
 --- Слежение за готовностью агента в панели `pane_id` после ответа `agent.start`: по
---- снимку, перечитанному после события `pane.agent_status_changed`. Первое из `idle`
---- (готов), `blocked` (диалог доверия) или исчезновения панели даёт сообщение и снимает
---- подписку. Сроков, таймеров и опроса нет.
+--- снимку, перечитанному после события `pane.agent_status_changed`. `blocked` (диалог
+--- доверия) даёт одно сообщение «не готов», слежение продолжается; `idle` (готов) или
+--- исчезновение панели дают сообщение и снимают подписку. Сроков, таймеров и опроса нет.
 local function watch_ready(pane_id)
-  local seen = false
+  local seen, blocked = false, false
   local unsubscribe
   local function check(st, events)
     if st.status ~= "connected" then
@@ -83,7 +83,8 @@ local function watch_ready(pane_id)
       if p.agent_status == "idle" then
         notify(("claudr: агент в панели %s готов"):format(pane_id))
         return true
-      elseif p.agent_status == "blocked" then
+      elseif p.agent_status == "blocked" and not blocked then
+        blocked = true
         notify(
           ("claudr: агент в панели %s не готов: ждёт ответа на диалог доверия к каталогу; %s"):format(
             pane_id,
@@ -91,7 +92,6 @@ local function watch_ready(pane_id)
           ),
           vim.log.levels.WARN
         )
-        return true
       end
       return false
     end
