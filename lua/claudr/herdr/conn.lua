@@ -1,5 +1,7 @@
--- Одно соединение с сокетом API herdr: строки JSON по одному объекту, ответы
--- сопоставляются запросам по `id`, несколько запросов могут быть в полёте.
+-- Соединения с сокетом API herdr: строки JSON по одному объекту, ответы сопоставляются
+-- запросам по `id`. Сервер обслуживает в соединении запросов один запрос и после ответа
+-- закрывает его, поэтому каждый запрос, кроме подписки, идёт своим соединением
+-- (`M.request`); соединение подписки (`M.open`) живёт, пока его не закроет одна из сторон.
 --
 -- Все обратные вызовы выполняются в обратных вызовах `vim.uv` (быстрый контекст):
 -- `vim.api` и `vim.fn` в них недоступны, переход в обычный контекст — дело вызывающего.
@@ -130,6 +132,45 @@ function M.open(path, handlers)
     handlers.on_open(nil)
   end)
   return c
+end
+
+--- Один запрос своим соединением: открыть, отправить, получить ответ по `id`, закрыть.
+--- `cb(err, result)` вызывается ровно один раз. Отказ в подключении — ошибка
+--- `server_unavailable` с полем `connect_error` (текст libuv, например `ENOENT: …`);
+--- закрытие соединения до ответа — `server_unavailable` без него. Возвращает объект
+--- с `close()`: отмена запроса, `cb` получает `server_unavailable`.
+function M.request(path, method, params, cb)
+  local done = false
+  local function finish(err, result)
+    if done then
+      return
+    end
+    done = true
+    cb(err, result)
+  end
+  local c
+  c = M.open(path, {
+    on_open = function(err)
+      if err then
+        finish({ code = CLOSED.code, message = err, connect_error = err })
+        return
+      end
+      c:request(method, params, function(rerr, result)
+        -- Закрытие после ответа — норма: сервер закрывает соединение и сам.
+        c:close()
+        finish(rerr, result)
+      end)
+    end,
+    on_close = function()
+      finish({ code = CLOSED.code, message = CLOSED.message })
+    end,
+  })
+  return {
+    close = function()
+      c:close()
+      finish({ code = CLOSED.code, message = CLOSED.message })
+    end,
+  }
 end
 
 return M

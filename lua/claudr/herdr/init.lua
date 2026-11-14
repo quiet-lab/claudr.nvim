@@ -1,13 +1,16 @@
 -- Клиент сокета API herdr (спецификация herdr-client): один общий экземпляр.
 --
--- Порядок подключения: соединение запросов и `ping` с проверкой протокола, затем подписка
--- на события жизненного цикла отдельным соединением, после `subscription_started` —
--- `session.snapshot` соединением запросов. Подписки по панелям держит третье соединение,
--- оно пересобирается по составу панелей последнего снимка. События служат только сигналом
--- перечитать снимок; перечитывания идут по одному, событие во время чтения вызывает ещё
--- одно. Потерю сервера клиент замечает по концу потока или ошибке `server_unavailable`,
--- возвращение — по созданию файла сокета (уведомление файловой системы). Таймеров и
--- опроса нет.
+-- Сервер обслуживает в соединении запросов один запрос, поэтому каждый запрос (`ping`,
+-- `session.snapshot`, запросы вызывающих) идёт своим соединением. Порядок подключения:
+-- `ping` с проверкой протокола, затем подписка на события жизненного цикла, после
+-- `subscription_started` — `session.snapshot`. Подписки по панелям держит отдельное
+-- соединение, оно пересобирается по составу панелей последнего снимка; конец этой подписки
+-- после кадра ошибки (подписанная панель закрыта) — сигнал перечитать снимок. События
+-- служат только сигналом перечитать снимок; перечитывания идут по одному, событие во время
+-- чтения вызывает ещё одно. Потерю сервера клиент замечает по отказу в подключении, концу
+-- потока подписки без кадра или ошибке `server_unavailable` подписке; обрыв соединения
+-- запроса — ошибка только этого запроса. Возвращение сервера — по созданию файла сокета
+-- (уведомление файловой системы). Таймеров и опроса нет.
 --
 -- Обратные вызовы `vim.uv` идут в быстром контексте: здесь нет `vim.api` и `vim.fn`,
 -- подписчики и вызывающие получают результат через `vim.schedule`.
@@ -60,7 +63,7 @@ local S = {
   message = nil,
   snapshot = empty_snapshot(),
   stale = false,
-  req = nil, -- соединение запросов
+  inflight = {}, -- запросы в полёте: объекты `conn.request`
   sub = nil, -- соединение подписки на события жизненного цикла
   pane_sub = nil, -- соединение подписок по панелям
   pane_new = nil, -- пересобираемая подписка по панелям, ещё не начатая
@@ -127,11 +130,16 @@ local function set_status(status, message)
 end
 
 local function close_all()
-  for _, key in ipairs({ "req", "sub", "pane_sub", "pane_new" }) do
+  for _, key in ipairs({ "sub", "pane_sub", "pane_new" }) do
     if S[key] then
       S[key]:close()
       S[key] = nil
     end
+  end
+  local inflight = S.inflight
+  S.inflight = {}
+  for h in pairs(inflight) do
+    h.close()
   end
   S.pane_key = nil
   S.failed_key = nil
@@ -147,6 +155,37 @@ local function close_watcher()
 end
 
 local connect
+
+-- Вид отказа в подключении по тексту ошибки libuv: "missing" — файла сокета нет,
+-- "refused" — файл есть, но сервер не принимает; иначе `nil`.
+local function refusal(text)
+  if type(text) ~= "string" then
+    return nil
+  end
+  if text:match("^ENOENT") or text:match("^ENOTDIR") then
+    return "missing"
+  end
+  if text:match("^ECONNREFUSED") then
+    return "refused"
+  end
+  return nil
+end
+
+-- Запрос своим соединением; `cb(err, result)` в быстром контексте.
+local function send(method, params, cb)
+  local h
+  local finished = false
+  h = conn.request(M.socket_path(), method, params, function(err, result)
+    finished = true
+    if h then
+      S.inflight[h] = nil
+    end
+    cb(err, result)
+  end)
+  if not finished then
+    S.inflight[h] = true
+  end
+end
 
 -- Ждать создания файла сокета. `check` — файл мог появиться между неудачным подключением
 -- (файла не было) и постановкой наблюдения: проверить его один раз после постановки.
@@ -202,16 +241,20 @@ end
 local resync
 
 -- Открыть соединение подписки `list`. `on_started()` — после `subscription_started`,
--- `on_rejected(err)` — сервер отклонил запрос (кроме `server_unavailable`).
-local function open_sub(gen, list, on_started, on_rejected)
+-- `on_rejected(err)` — сервер отклонил запрос (кроме `server_unavailable`). `on_ended()`
+-- (только у подписки по панелям) — сервер прислал кадр ошибки, кроме `events_lost`
+-- и `server_unavailable`, и закрыл поток: так herdr завершает подписку, когда подписанная
+-- панель закрыта. Без `on_ended` и при конце потока без такого кадра — «нет сервера».
+local function open_sub(gen, list, on_started, on_rejected, on_ended)
   local c
+  local ended = false
   c = conn.open(M.socket_path(), {
     on_open = function(err)
       if gen ~= S.gen then
         return
       end
       if err then
-        go_no_server(false)
+        go_no_server(refusal(err) == "missing")
         return
       end
       c:request("events.subscribe", { subscriptions = list }, function(rerr)
@@ -236,12 +279,23 @@ local function open_sub(gen, list, on_started, on_rejected)
       end
     end,
     on_error = function(err)
-      if gen == S.gen and err.code == "events_lost" then
+      if gen ~= S.gen then
+        return
+      end
+      local code = type(err) == "table" and err.code or nil
+      if code == "events_lost" then
         resync()
+      elseif code ~= "server_unavailable" and on_ended then
+        ended = true
       end
     end,
     on_close = function()
-      if gen == S.gen then
+      if gen ~= S.gen then
+        return
+      end
+      if ended then
+        on_ended()
+      else
         go_no_server(false)
       end
     end,
@@ -302,12 +356,21 @@ local function sync_pane_subs()
     c:close()
     S.failed_key = key
     refresh()
+  end, function()
+    -- Подписанная панель закрыта, сервер завершил подписку: подписка пересобирается
+    -- по новому снимку, общая подписка не затрагивается.
+    if S.pane_sub == c then
+      S.pane_sub = nil
+      S.pane_key = nil
+    end
+    S.stale = true
+    refresh()
   end)
   S.pane_new = c
 end
 
 refresh = function()
-  if not S.req or (S.status ~= "connecting" and S.status ~= "connected") then
+  if not S.sub or (S.status ~= "connecting" and S.status ~= "connected") then
     return
   end
   if S.reading then
@@ -317,14 +380,17 @@ refresh = function()
   S.reading = true
   S.dirty = false
   local gen = S.gen
-  S.req:request("session.snapshot", nil, function(err, result)
+  send("session.snapshot", nil, function(err, result)
     if gen ~= S.gen then
       return
     end
     S.reading = false
     if err then
-      if err.code == "server_unavailable" then
-        go_no_server(false)
+      -- Обрыв соединения запроса — ошибка этого чтения, а не потеря сервера: остановку
+      -- сервера сообщает подписка. Кэш остаётся устаревшим до следующего события.
+      local kind = refusal(err.connect_error)
+      if kind then
+        go_no_server(kind == "missing")
       elseif S.dirty then
         refresh()
       end
@@ -376,46 +442,29 @@ connect = function()
   close_all()
   close_watcher()
   set_status("connecting", nil)
-  S.req = conn.open(M.socket_path(), {
-    on_open = function(err)
-      if gen ~= S.gen then
-        return
-      end
-      if err then
-        -- Файла нет — проверить его после постановки наблюдения; файл есть, но сервер
-        -- не принимает — ждать только события файловой системы.
-        local missing = err:match("^ENOENT") or err:match("^ENOTDIR")
-        go_no_server(missing ~= nil)
-        return
-      end
-      S.req:request("ping", nil, function(perr, result)
-        if gen ~= S.gen then
-          return
-        end
-        if perr then
-          go_no_server(false)
-          return
-        end
-        local protocol = type(result) == "table" and tonumber(result.protocol) or nil
-        if not protocol or protocol < M.MIN_PROTOCOL then
-          go_incompatible(
-            string.format(
-              "herdr: требуется протокол %d и новее, найден %s",
-              M.MIN_PROTOCOL,
-              type(result) == "table" and tostring(result.protocol) or "nil"
-            )
-          )
-          return
-        end
-        subscribe_lifecycle(gen)
-      end)
-    end,
-    on_close = function()
-      if gen == S.gen then
-        go_no_server(false)
-      end
-    end,
-  })
+  send("ping", nil, function(perr, result)
+    if gen ~= S.gen then
+      return
+    end
+    if perr then
+      -- Файла нет — проверить его после постановки наблюдения; файл есть, но сервер
+      -- не принимает или не ответил — ждать только события файловой системы.
+      go_no_server(refusal(perr.connect_error) == "missing")
+      return
+    end
+    local protocol = type(result) == "table" and tonumber(result.protocol) or nil
+    if not protocol or protocol < M.MIN_PROTOCOL then
+      go_incompatible(
+        string.format(
+          "herdr: требуется протокол %d и новее, найден %s",
+          M.MIN_PROTOCOL,
+          type(result) == "table" and tostring(result.protocol) or "nil"
+        )
+      )
+      return
+    end
+    subscribe_lifecycle(gen)
+  end)
 end
 
 --- Подключиться к серверу; без сервера — состояние "no_server" и ожидание файла сокета.
@@ -456,11 +505,12 @@ function M.subscribe(cb)
   end
 end
 
---- Запрос к серверу соединением запросов; `cb(err, result)` в обычном контексте,
+--- Запрос к серверу своим соединением; `cb(err, result)` в обычном контексте,
 --- `err = {code, message}`. Без подключения — сразу `server_unavailable`, ничего
---- не откладывается.
+--- не откладывается. Обрыв соединения до ответа — `server_unavailable` этому запросу;
+--- отказ в подключении к тому же переводит клиента в «нет сервера».
 function M.request(method, params, cb)
-  if S.status ~= "connected" or not S.req then
+  if S.status ~= "connected" then
     local message = S.message
     if S.status == "connecting" then
       message = NOT_READY
@@ -468,7 +518,15 @@ function M.request(method, params, cb)
     cb({ code = "server_unavailable", message = message or NO_SERVER })
     return
   end
-  S.req:request(method, params, function(err, result)
+  local gen = S.gen
+  send(method, params, function(err, result)
+    if err and err.connect_error then
+      local kind = refusal(err.connect_error)
+      if kind and gen == S.gen then
+        go_no_server(kind == "missing")
+      end
+      err = { code = err.code, message = NO_SERVER }
+    end
     vim.schedule(function()
       cb(err, result)
     end)

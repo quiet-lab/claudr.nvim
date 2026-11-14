@@ -1,6 +1,9 @@
 -- Двойник сервера herdr для тестов: Unix-сокет на `vim.uv` в процессе теста, кадры JSON
 -- по строке. Кадры повторяют наблюдавшиеся у herdr 0.9.5 (протокол 22): ключи по алфавиту,
--- в ответе `id` первым. Управляется тестом: снимок, события, ошибки, удержание ответов,
+-- в ответе `id` первым. Как у herdr, соединение обслуживает один запрос: после ответа (кроме
+-- начатой подписки) двойник закрывает соединение, на второй запрос в том же соединении
+-- закрывает его без ответа; подписка по панелям при закрытии подписанной панели получает
+-- кадр ошибки `pane_not_found` и закрывается. Управляется тестом: снимок, события, ошибки, удержание ответов,
 -- остановка и перезапуск. Поддельный `herdr` (tests/helpers/fake_bin/herdr) управляется
 -- через каталог `fake_herdr/` рядом с сокетом.
 --
@@ -378,13 +381,27 @@ function D:_reply(c, method, line, after)
   end
 end
 
+-- Закрыть соединение после ответа: настоящий сервер обслуживает в соединении один запрос.
+local function close_after(self)
+  return function(conn)
+    self:_close_conn(conn, true)
+  end
+end
+
 function D:_on_line(c, line)
   if line == "" then
     return
   end
+  if c.served then
+    -- Второй запрос в том же соединении: herdr сбрасывает соединение без ответа.
+    self:_close_conn(c, false)
+    return
+  end
+  c.served = true
   local ok, req = pcall(vim.json.decode, line)
   if not ok or type(req) ~= "table" then
     self:_write(c, json.error("", "invalid_request", "invalid request json"))
+    self:_close_conn(c, true)
     return
   end
   local params = is_nil(req.params) and dict() or req.params
@@ -398,28 +415,29 @@ function D:_on_line(c, line)
       -- Настоящий сервер оставляет агента в панели в состоянии blocked.
       self:_start_agent(params, "blocked")
     end
-    local after
-    if method == "events.subscribe" and fail.code == "server_unavailable" then
-      after = function(conn)
-        self:_close_conn(conn, true)
-      end
-    end
     local target = params.name or params.target or params.pane_id or ""
     local message = fail.message or string.format(MESSAGES[fail.code] or "%s", target)
-    self:_reply(c, method, json.error(id, fail.code, message), after)
+    self:_reply(c, method, json.error(id, fail.code, message), close_after(self))
     return
   end
 
   local handler = self.handlers[method]
   if not handler then
-    self:_reply(c, method, json.error(id, "invalid_request", "unknown method " .. tostring(method)))
+    self:_reply(
+      c,
+      method,
+      json.error(id, "invalid_request", "unknown method " .. tostring(method)),
+      close_after(self)
+    )
     return
   end
   local result, err_code, err_message = handler(self, params, c, id)
   if err_code then
-    self:_reply(c, method, json.error(id, err_code, err_message))
+    self:_reply(c, method, json.error(id, err_code, err_message), close_after(self))
   elseif result then
-    self:_reply(c, method, json.response(id, result))
+    -- Начатая подписка остаётся открытой под поток событий.
+    local after = not c.sub and close_after(self) or nil
+    self:_reply(c, method, json.response(id, result), after)
   end
 end
 
@@ -761,7 +779,28 @@ function D:emit(event, data)
       end
     end
   end
+  if event == "pane_closed" and not is_nil(data.pane_id) then
+    self:_end_pane_subscriptions(data.pane_id)
+  end
   return delivered
+end
+
+-- Подписанная панель закрыта: каждая подписка с записью этой панели получает кадр
+-- `{"id":<id подписки>,"error":{"code":"pane_not_found",…}}`, затем конец потока.
+function D:_end_pane_subscriptions(pane_id)
+  for _, s in ipairs(vim.list_slice(self.subscriptions)) do
+    for _, rec in ipairs(s.subscriptions) do
+      if rec.pane_id == pane_id then
+        local c = self.connections[s.conn]
+        self:_write(
+          c,
+          json.error(s.id, "pane_not_found", string.format(MESSAGES.pane_not_found, pane_id))
+        )
+        self:_close_conn(c, true)
+        break
+      end
+    end
+  end
 end
 
 --- Произвольная строка всем соединениям подписки (без перевода строки в `line`).
@@ -781,7 +820,7 @@ function D:events_lost(message)
 end
 
 --- Следующий вызов `method` ответит ошибкой `code` (текст по умолчанию — как у herdr).
---- Для `events.subscribe` с `server_unavailable` соединение после ответа закрывается.
+--- Соединение после ответа закрывается, как после любого ответа, кроме начатой подписки.
 function D:fail(method, code, message)
   self.failures[method] = self.failures[method] or {}
   table.insert(self.failures[method], { code = code, message = message })
@@ -935,6 +974,9 @@ function D:pane_exited(pane_id, opts)
   end
   self:emit("pane_updated", { pane = rec })
   self:emit("pane_exited", { pane_id = p.pane_id, workspace_id = p.workspace_id })
+  if opts and opts.vanish then
+    self:_end_pane_subscriptions(p.pane_id)
+  end
 end
 
 --- Остановка сервера: соединения закрываются без кадра, файл сокета удаляется.

@@ -132,15 +132,34 @@ describe("сокет и ping", function()
   end)
 
   it(
-    "ответы на несколько запросов одного соединения соответствуют id",
+    "соединение запросов закрывается после ответа",
     function()
       local c = client()
+      t.eq(c:call("ping").result.type, "pong")
+      t.wait(function()
+        return c.closed
+      end, "закрытие соединения сервером")
+      t.eq(#c.lines, 1)
+    end
+  )
+
+  it(
+    "второй запрос в том же соединении — закрытие без ответа",
+    function()
+      d:hold("ping")
+      local c = client()
       local a = c:send("ping")
-      local b = c:send("session.snapshot")
-      t.eq(c:wait_response(b).result.type, "session_snapshot")
-      t.eq(c:wait_response(a).result.type, "pong")
-      t.eq(d:count("ping"), 1)
-      t.eq(d:last("session.snapshot").id, b)
+      t.wait(function()
+        return d:held_count("ping") == 1
+      end, "первый запрос у сервера")
+      c:send("session.snapshot")
+      t.wait(function()
+        return c.closed
+      end, "сброс соединения")
+      d:release("ping")
+      t.eq(#c.lines, 0, "ответа нет ни на один запрос")
+      t.eq(c:response(a), nil)
+      t.eq(d:count("session.snapshot"), 0, "второй запрос не обработан")
     end
   )
 end)
@@ -270,6 +289,9 @@ describe("events.subscribe", function()
       t.eq(f.error.code, "pane_not_found")
       t.eq(#d.subscriptions, 0)
       t.eq(d:emit("pane_created", {}), 0)
+      t.wait(function()
+        return c.closed
+      end, "закрытие соединения после отказа")
     end
   )
 
@@ -285,6 +307,67 @@ describe("events.subscribe", function()
       t.eq(c.frames[2].id, "1")
       t.eq(c.frames[2].error.code, "events_lost")
       t.eq(#d.subscriptions, 0)
+    end
+  )
+
+  -- Подписка по панелям и общая подписка, как их держит клиент.
+  local function pane_and_lifecycle()
+    local panes = client()
+    subscribe(panes, {
+      { type = "pane.output_changed", pane_id = "w1:p1" },
+      { type = "pane.output_changed", pane_id = "w1:p2" },
+    })
+    local general = client()
+    subscribe(general, { { type = "pane.closed" }, { type = "pane.exited" } })
+    return panes, general
+  end
+
+  local function check_pane_not_found(panes, general, pane_id)
+    t.wait(function()
+      return panes.closed
+    end, "конец потока подписки по панелям")
+    t.eq(#panes.lines, 2)
+    t.eq(
+      panes.lines[2],
+      '{"id":"1","error":{"code":"pane_not_found","message":"pane ' .. pane_id .. ' not found"}}'
+    )
+    t.eq(#d.subscriptions, 1, "общая подписка осталась")
+    t.ok(not general.closed)
+  end
+
+  it(
+    "закрытие подписанной панели — кадр pane_not_found и конец потока подписки по панелям",
+    function()
+      local panes, general = pane_and_lifecycle()
+      table.remove(d.state.panes, 2)
+      t.eq(d:emit("pane_closed", { pane_id = "w1:p2", workspace_id = "w1" }), 1)
+      check_pane_not_found(panes, general, "w1:p2")
+      t.wait(function()
+        return #general.lines == 2
+      end, "pane_closed общей подписке")
+      t.eq(general.frames[2].event, "pane_closed")
+    end
+  )
+
+  it(
+    "исчезновение подписанной панели при выходе процесса — кадр pane_not_found",
+    function()
+      local panes, general = pane_and_lifecycle()
+      d:pane_exited("w1:p2", { vanish = true })
+      check_pane_not_found(panes, general, "w1:p2")
+    end
+  )
+
+  it(
+    "выход процесса без исчезновения панели подписку по панелям не завершает",
+    function()
+      local panes, general = pane_and_lifecycle()
+      d:pane_exited("w1:p2")
+      t.wait(function()
+        return #general.lines == 2
+      end, "pane_exited общей подписке")
+      t.ok(not panes.closed)
+      t.eq(#d.subscriptions, 2)
     end
   )
 
@@ -517,12 +600,11 @@ describe("pane.send_keys и agent.*", function()
     "fail отвечает ошибкой с заданным кодом и текстом только на следующий вызов",
     function()
       d:fail("pane.send_keys", "not_found", "pane not found")
-      local c = client()
-      t.eq(c:call("pane.send_keys", { pane_id = "w1:p1", keys = { "x" } }).error, {
+      t.eq(client():call("pane.send_keys", { pane_id = "w1:p1", keys = { "x" } }).error, {
         code = "not_found",
         message = "pane not found",
       })
-      t.eq(c:call("pane.send_keys", { pane_id = "w1:p1", keys = { "x" } }).result.type, "ok")
+      t.eq(client():call("pane.send_keys", { pane_id = "w1:p1", keys = { "x" } }).result.type, "ok")
     end
   )
 end)
@@ -621,28 +703,40 @@ describe("удержание ответов", function()
       t.eq(c:response(id), nil)
       d:release("session.snapshot")
       t.eq(#c:wait_response(id).result.snapshot.panes, 2)
-      t.eq(#c:call("session.snapshot").result.snapshot.panes, 3)
+      t.eq(#client():call("session.snapshot").result.snapshot.panes, 3)
     end
   )
 
   it(
     "ответы не по порядку: второй запрос получает ответ первым",
     function()
-      local c = client()
+      local ca, cb = client(), client()
       d:reply_order("reverse")
-      local a = c:send("ping")
-      local b = c:send("session.snapshot")
+      ca:send("ping")
+      t.wait(function()
+        return d:held_count() == 1
+      end)
+      cb:send("session.snapshot")
       t.wait(function()
         return d:held_count() == 2
       end)
+      -- Порядок записи ответов двойником: по соединениям, в которые они ушли.
+      local written = {}
+      local write = d._write
+      d._write = function(self, c, line)
+        table.insert(written, c.id)
+        return write(self, c, line)
+      end
       d:release()
+      d._write = nil
+      t.eq(written, { 2, 1 }, "сначала ответ второму соединению")
       t.wait(function()
-        return #c.frames == 2
+        return #ca.frames == 1 and #cb.frames == 1
       end)
-      t.eq(c.frames[1].id, b)
-      t.eq(c.frames[2].id, a)
+      t.eq(ca.frames[1].result.type, "pong")
+      t.eq(cb.frames[1].result.type, "session_snapshot")
       d:reply_order("normal")
-      t.eq(c:call("ping").result.type, "pong")
+      t.eq(client():call("ping").result.type, "pong")
     end
   )
 end)

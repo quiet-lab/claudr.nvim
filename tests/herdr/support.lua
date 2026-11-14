@@ -135,6 +135,13 @@ function M.connected(herdr, opts)
       table.insert(ids, p.pane_id)
     end
     M.wait_pane_subscriptions(d, ids)
+    if #ids > 0 then
+      -- Начатая подписка по панелям вызывает ещё одно чтение снимка: дождаться его конца,
+      -- чтобы запросы теста не смешались с запросами подключения.
+      t.wait(function()
+        return d:count("session.snapshot") >= 2 and not herdr._reading()
+      end, "чтение снимка после подписки по панелям")
+    end
   end
   return d
 end

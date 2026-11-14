@@ -61,6 +61,7 @@ describe("Кадры и соответствие ответов", function()
     local d = track(support.connected(herdr))
     d:set_output("w2:p1", { lines = { "first" } })
     d:set_output("w2:p2", { lines = { "second" } })
+    local rec = support.recorder(herdr)
     d:reply_order("reverse")
     local got = {}
     herdr.read_pane("w2:p1", {}, function(err, read)
@@ -78,11 +79,8 @@ describe("Кадры и соответствие ответов", function()
         table.insert(reads, r)
       end
     end
-    t.eq(
-      reads[1].conn,
-      reads[2].conn,
-      "оба запроса в полёте на одном соединении"
-    )
+    -- Сервер обслуживает в соединении один запрос: у каждого запроса своё соединение.
+    t.ok(reads[1].conn ~= reads[2].conn, "запросы на разных соединениях")
     d:release() -- сначала ответ на второй запрос
     d:reply_order("normal")
     t.wait(function()
@@ -90,7 +88,86 @@ describe("Кадры и соответствие ответов", function()
     end, "оба ответа")
     t.eq(got.a, { text = "first" })
     t.eq(got.b, { text = "second" })
+    vim.wait(0)
+    t.eq(herdr.state().status, "connected")
+    t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
+    rec.unsubscribe()
   end)
+
+  it(
+    "несколько запросов подряд и одновременно — каждый своим соединением",
+    function()
+      local d = track(support.connected(herdr))
+      local rec = support.recorder(herdr)
+      -- Подряд: каждый следующий после ответа на предыдущий.
+      for _ = 1, 3 do
+        local err, result = support.call(herdr, "pane.send_keys", { pane_id = "w1:p1", keys = "x" })
+        t.eq(err, nil)
+        t.eq(result, { type = "ok" })
+      end
+      -- Одновременно: все в полёте до первого ответа.
+      local results = {}
+      for i = 1, 4 do
+        herdr.read_pane("w2:p1", {}, function(err, read)
+          results[i] = { err = err, read = read }
+        end)
+      end
+      t.wait(function()
+        return #results == 4 and results[1] and results[2] and results[3] and results[4]
+      end, "ответы на одновременные запросы")
+      for i = 1, 4 do
+        t.eq(results[i].err, nil)
+        t.eq(results[i].read.pane_id, "w2:p1")
+      end
+      local conns = {}
+      for _, r in ipairs(d.requests) do
+        if r.method == "pane.send_keys" or r.method == "pane.read" then
+          t.ok(
+            not conns[r.conn],
+            "соединение запроса не используется повторно"
+          )
+          conns[r.conn] = true
+        end
+      end
+      t.eq(vim.tbl_count(conns), 7)
+      -- Закрытие соединения запроса после ответа — не потеря сервера.
+      vim.wait(0)
+      t.eq(herdr.state().status, "connected")
+      t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
+      t.eq(support.lifecycle_subscriptions(d), 1, "подписка не тронута")
+      rec.unsubscribe()
+    end
+  )
+
+  it(
+    "обрыв соединения запроса до ответа — ошибка этого запроса, клиент остаётся подключённым",
+    function()
+      local d = track(support.connected(herdr))
+      local rec = support.recorder(herdr)
+      d:hold("pane.read")
+      local got
+      herdr.read_pane("w2:p1", {}, function(err)
+        got = err
+      end)
+      t.wait(function()
+        return d:held_count("pane.read") == 1
+      end, "запрос у сервера")
+      -- Сервер закрывает соединение запроса, не ответив.
+      local conn_id = d:last("pane.read").conn
+      d:_close_conn(d.connections[conn_id], false)
+      t.wait(function()
+        return got ~= nil
+      end, "ошибка запросу")
+      t.eq(got.code, "server_unavailable")
+      d:release("pane.read")
+      vim.wait(0)
+      t.eq(herdr.state().status, "connected")
+      t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
+      local err = support.call(herdr, "pane.send_keys", { pane_id = "w1:p1", keys = "x" })
+      t.eq(err, nil, "следующий запрос выполняется")
+      rec.unsubscribe()
+    end
+  )
 
   it("Ошибка сервера", function()
     local d = track(support.connected(herdr))

@@ -196,6 +196,8 @@ describe("Выход процесса панели", function()
     t.eq(exited.data.exit_code, nil)
     -- Подписки по панелям пересобраны по новому снимку.
     support.wait_pane_subscriptions(d, { "w2:p1", "w2:p2" })
+    t.eq(herdr.state().status, "connected")
+    t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
   end)
 
   it("Выход при остальных панелях", function()
@@ -246,7 +248,30 @@ describe("Подписки по панелям", function()
     t.wait(function()
       return rec:has_event("pane.agent_status_changed", "w2:p1")
     end, "событие по оставшейся панели")
+    -- Кадр pane_not_found и конец потока подписки по панелям — не потеря сервера.
+    t.eq(herdr.state().status, "connected")
+    t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
   end)
+
+  it(
+    "кадр pane_not_found и конец подписки по панелям без события — подписка пересобрана",
+    function()
+      local subscribes = d:count("events.subscribe")
+      local snapshots = d:count("session.snapshot")
+      -- Панель исчезла, событие жизненного цикла не пришло: сигналом служит только
+      -- завершение подписки по панелям.
+      table.remove(d.state.panes, 3) -- w2:p2
+      d:_end_pane_subscriptions("w2:p2")
+      support.wait_pane_subscriptions(d, { "w1:p1", "w2:p1" })
+      wait_idle()
+      t.ok(d:count("session.snapshot") > snapshots, "снимок перечитан")
+      t.eq(d:count("events.subscribe"), subscribes + 1)
+      t.eq(support.lifecycle_subscriptions(d), 1, "общая подписка не тронута")
+      t.ok(not support.has_pane(herdr.state().snapshot, "w2:p2"))
+      t.eq(herdr.state().status, "connected")
+      t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
+    end
+  )
 
   it("Новая панель", function()
     table.insert(d.state.panes, double.pane({ pane_id = "w2:p3" }))
@@ -273,10 +298,15 @@ describe("Подписки по панелям", function()
         return d:count("events.subscribe") > subscribes
       end, "подписка с исчезнувшей панелью подана")
       d:emit("pane_closed", { pane_id = "w2:p3", workspace_id = "w2" })
+      -- Прежняя подписка по панелям совпадает с итоговым составом, поэтому ждать нужно
+      -- снимка без исчезнувшей панели, а не смены подписки.
+      t.wait(function()
+        return not support.has_pane(herdr.state().snapshot, "w2:p3")
+      end, "снимок без исчезнувшей панели")
       support.wait_pane_subscriptions(d, { "w1:p1", "w2:p1", "w2:p2" })
       wait_idle()
-      t.ok(not support.has_pane(herdr.state().snapshot, "w2:p3"))
       t.eq(herdr.state().status, "connected")
+      t.ok(not rec:seen_status("no_server"), "без перехода в «нет сервера»")
     end
   )
 end)
