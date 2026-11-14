@@ -116,20 +116,20 @@ function M.mcp_for(project_dir)
   return nil
 end
 
---- Базовая сессия проекта для ответвления или `nil`: только при `fork_from_base = true`
---- и заданной `base_session` (идентификатор или функция `fn(project_dir) -> идентификатор`).
-local function base_session(project_dir)
-  local cfg = config()
-  if cfg.fork_from_base ~= true then
-    return nil
+-- Ответвление от базовой сессии в этой версии не поддерживается: при `fork_from_base = true`
+-- новая тема — обычная новая сессия, предупреждение — один раз за сеанс Neovim.
+local fork_warned = false
+
+local function warn_fork()
+  if config().fork_from_base ~= true or fork_warned then
+    return
   end
-  local base = cfg.base_session
-  if type(base) == "function" then
-    base = base(project_dir)
-  elseif type(base) == "table" then
-    base = base[project_dir]
-  end
-  return type(base) == "string" and base ~= "" and base or nil
+  fork_warned = true
+  vim.notify(
+    "claudr: ответвление темы от базовой сессии (fork_from_base) в этой версии не поддерживается;"
+      .. " тема начинается новой сессией",
+    vim.log.levels.WARN
+  )
 end
 
 --- Аргументы отвечающего процесса для темы.
@@ -171,10 +171,7 @@ function M.args(topic)
   if topic.has_session then
     vim.list_extend(args, { "--resume", topic.id })
   else
-    local base = base_session(rec.project_dir)
-    if base then
-      vim.list_extend(args, { "--resume", base, "--fork-session" })
-    end
+    warn_fork()
     vim.list_extend(args, { "--session-id", topic.id })
   end
   return args
@@ -380,6 +377,7 @@ end
 --- Забывает темы в памяти (как после перезапуска Neovim); работающие процессы не трогает.
 function M._reset()
   topics = {}
+  fork_warned = false
 end
 
 --- Работает ли процесс темы.

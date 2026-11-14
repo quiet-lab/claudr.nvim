@@ -597,30 +597,34 @@ describe("Ответвление от базовой сессии", function()
   )
 
   it(
-    "базовая сессия задана, но настройка выключена — ответвления нет",
+    "включённая настройка: обычная новая тема и одно предупреждение за сеанс",
     function()
       local p = env.project()
-      env.reset({ code_questions = { base_session = "00000000-0000-4000-8000-0000000000b0" } })
-      env.edit(p.foo, 4)
-      local topic = env.ask()
-      env.wait_idle(topic)
-      t.ok(not env.has(p.ctl:starts()[1].argv, "--fork-session"))
-    end
-  )
-
-  it(
-    "включённая настройка с базовой сессией — ответвление с идентификатором темы",
-    function()
-      local p = env.project()
-      local base = "00000000-0000-4000-8000-0000000000b0"
-      env.reset({ code_questions = { fork_from_base = true, base_session = base } })
-      env.edit(p.foo, 4)
-      local topic = env.ask()
-      env.wait_idle(topic)
-      local argv = p.ctl:starts()[1].argv
-      t.eq(env.arg(argv, "--resume"), base)
-      t.ok(env.has(argv, "--fork-session"))
-      t.eq(env.arg(argv, "--session-id"), topic.id)
+      env.reset({ code_questions = { fork_from_base = true } })
+      local warnings = {}
+      local orig = vim.notify
+      vim.notify = function(msg, level)
+        if level == vim.log.levels.WARN then
+          warnings[#warnings + 1] = msg
+        end
+      end
+      local buf = env.edit(p.foo, 4)
+      local a = env.ask()
+      env.wait_idle(a)
+      vim.api.nvim_set_current_win(vim.fn.bufwinid(buf))
+      local b = env.ask({ question = "Ещё тема" })
+      env.wait_idle(b)
+      vim.notify = orig
+      t.eq(#warnings, 1, "предупреждение одно")
+      t.match(warnings[1], "fork_from_base")
+      local starts = p.ctl:starts()
+      t.eq(#starts, 2)
+      for i, tp in ipairs({ a, b }) do
+        local argv = starts[i].argv
+        t.ok(not env.has(argv, "--fork-session"))
+        t.ok(not env.has(argv, "--resume"))
+        t.eq(env.arg(argv, "--session-id"), tp.id)
+      end
     end
   )
 end)
