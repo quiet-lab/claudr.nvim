@@ -28,6 +28,10 @@ vim.uv.os_setenv("XDG_STATE_HOME", tmpdir .. "/state")
 vim.uv.os_setenv("XDG_DATA_HOME", tmpdir .. "/data")
 vim.uv.os_setenv("XDG_CACHE_HOME", tmpdir .. "/cache")
 vim.uv.os_setenv("CLAUDE_CONFIG_DIR", tmpdir .. "/claude")
+-- Каталог времени выполнения: сокеты тестов не попадают в настоящий каталог.
+vim.fn.mkdir(tmpdir .. "/run", "p", "0700")
+vim.uv.fs_chmod(tmpdir .. "/run", tonumber("700", 8))
+vim.uv.os_setenv("XDG_RUNTIME_DIR", tmpdir .. "/run")
 vim.uv.os_setenv("TMPDIR", tmpdir)
 
 for _, name in ipairs({
