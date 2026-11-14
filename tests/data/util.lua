@@ -65,6 +65,48 @@ function M.watch_session(session_id, on_change)
   return h
 end
 
+--- Реплики диалога транскрипта (`claudr.data.read_dialogue`) с ожиданием конца асинхронного
+--- чтения: список реплик или `nil, "unavailable"`.
+function M.read_dialogue(path)
+  local replies, found, done = {}, nil, false
+  require("claudr.data").read_dialogue(path, function(chunk)
+    vim.list_extend(replies, chunk)
+  end, function(f)
+    found, done = f, true
+  end)
+  t.wait(function()
+    return done
+  end, "конец чтения диалога")
+  if not found then
+    return nil, "unavailable"
+  end
+  return replies
+end
+
+--- Перечень сессий каталога проекта (`claudr.data.list_sessions`) с ожиданием конца чтения.
+function M.list_sessions(project_dir)
+  local list
+  require("claudr.data").list_sessions(project_dir, function(l)
+    list = l
+  end)
+  t.wait(function()
+    return list ~= nil
+  end, "конец чтения перечня сессий")
+  return list
+end
+
+--- Рабочий каталог сессии (`claudr.data.session_cwd`) с ожиданием конца чтения.
+function M.session_cwd(path)
+  local cwd, done = nil, false
+  require("claudr.data").session_cwd(path, function(c)
+    cwd, done = c, true
+  end)
+  t.wait(function()
+    return done
+  end, "конец чтения рабочего каталога")
+  return cwd
+end
+
 --- Считает вызовы `vim.uv.fs_open` и `vim.uv.fs_read` (чтения файлов) до `restore()`.
 function M.count_reads()
   local counter = { open = 0, read = 0, paths = {} }
@@ -82,6 +124,58 @@ function M.count_reads()
     vim.uv.fs_open, vim.uv.fs_read = orig_open, orig_read
   end
   return counter
+end
+
+--- Считает открытые дескрипторы файлов (`vim.uv.fs_open` и `vim.uv.fs_close`) до
+--- `restore()`: `live()` — число открытых и ещё не закрытых.
+function M.count_fds()
+  local c = { opened = 0, closed = 0 }
+  local orig_open, orig_close = vim.uv.fs_open, vim.uv.fs_close
+  vim.uv.fs_open = function(path, flags, mode, cb)
+    if not cb then
+      local fd, err, name = orig_open(path, flags, mode)
+      if fd then
+        c.opened = c.opened + 1
+      end
+      return fd, err, name
+    end
+    return orig_open(path, flags, mode, function(err, fd)
+      if fd then
+        c.opened = c.opened + 1
+      end
+      return cb(err, fd)
+    end)
+  end
+  vim.uv.fs_close = function(fd, cb)
+    c.closed = c.closed + 1
+    return orig_close(fd, cb)
+  end
+  function c.live()
+    return c.opened - c.closed
+  end
+  function c.restore()
+    vim.uv.fs_open, vim.uv.fs_close = orig_open, orig_close
+  end
+  return c
+end
+
+--- Транскрипт диалога: `count` реплик (чётные — пользователя, нечётные — агента) по `size`
+--- байт текста; возвращает реплики в порядке записи.
+function M.big_dialogue(path, session_id, count, size)
+  local f = assert(io.open(path, "w"))
+  local expected = {}
+  for i = 1, count do
+    local role = i % 2 == 1 and "user" or "assistant"
+    local text = ("реплика %d "):format(i):rep(math.ceil(size / 14)):sub(1, size)
+    local rec = role == "user" and fixtures.user_record(session_id, text)
+      or fixtures.assistant_record(session_id, text)
+    f:write(vim.json.encode(rec), "\n")
+    -- запись другого вида, которую диалог пропускает
+    f:write(vim.json.encode({ type = "queue-operation", operation = "enqueue" }), "\n")
+    expected[#expected + 1] = { role = role, text = text }
+  end
+  f:close()
+  return expected
 end
 
 --- Записи запуска фоновой команды Bash: вызов `tool_use` и результат с идентификатором задачи

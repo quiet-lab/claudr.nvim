@@ -4,7 +4,7 @@ local t = require("helpers.t")
 local s = require("view.support")
 local view = require("claudr.view")
 local model = require("claudr.tree.model")
-local data = require("claudr.data")
+local u = require("data.util")
 local fixtures = s.fixtures
 
 after_each(function()
@@ -42,7 +42,7 @@ describe("Субагент — транскрипт по мере записи",
       fixtures.session_dir("owner-killed") .. "/subagents/agent-" .. node.data.id .. ".jsonl"
     )
     -- уже записанное
-    local before = data.read_dialogue(v.path)
+    local before = u.read_dialogue(v.path)
     t.ok(#before > 0, "в образце есть реплики")
     s.wait_text(v.buf, before[#before].text:match("[^\n]+"), "записанные реплики")
     fixtures.append(v.path, {
@@ -69,7 +69,10 @@ describe("Субагент — транскрипт по мере записи",
       return n.state == "finished"
     end)
     local v = view.open(node)
-    local replies = data.read_dialogue(v.path)
+    t.wait(function()
+      return v.loaded
+    end, "конец чтения транскрипта")
+    local replies = u.read_dialogue(v.path)
     t.ok(#replies > 0, "в образце есть реплики")
     local buf_lines = lines(v.buf)
     local roles = 0

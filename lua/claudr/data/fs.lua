@@ -66,58 +66,6 @@ function M.tail(path)
   return { path = path, offset = 0 }
 end
 
--- Читает байты файла от смещения читателя до конца; nil — файла нет.
-local function read_from(t)
-  local fd = uv.fs_open(t.path, "r", 438)
-  if not fd then
-    return nil
-  end
-  local st = uv.fs_fstat(fd)
-  if not st then
-    uv.fs_close(fd)
-    return nil
-  end
-  if st.size < t.offset then
-    -- файл заменён или усечён: читается заново
-    t.offset = 0
-  end
-  local data = ""
-  if st.size > t.offset then
-    data = uv.fs_read(fd, st.size - t.offset, t.offset) or ""
-  end
-  uv.fs_close(fd)
-  return data
-end
-
---- Новые полные строки файла с запомненного смещения. Незаконченная последняя строка
---- не возвращается и не сдвигает смещение. nil — файла нет.
-function M.read_lines(t)
-  local data = read_from(t)
-  if not data then
-    return nil
-  end
-  local last = nil
-  local pos = #data
-  while pos > 0 do
-    if data:byte(pos) == 10 then
-      last = pos
-      break
-    end
-    pos = pos - 1
-  end
-  local lines = {}
-  if not last then
-    return lines
-  end
-  t.offset = t.offset + last
-  for line in data:sub(1, last):gmatch("([^\n]*)\n") do
-    if line ~= "" then
-      lines[#lines + 1] = line
-    end
-  end
-  return lines
-end
-
 --- Размер порции асинхронного чтения, байт.
 M.CHUNK = 256 * 1024
 
@@ -213,13 +161,100 @@ function M.read_lines_async(t, on_text, on_done, cancelled)
   end)
 end
 
---- Новые байты файла с запомненного смещения (кусок вывода). nil — файла нет.
-function M.read_chunk(t)
-  local data = read_from(t)
-  if data then
-    t.offset = t.offset + #data
+-- Длина незаконченной последовательности UTF-8 в конце `data` (0 — конец на границе
+-- символа или байты не похожи на UTF-8).
+local function utf8_tail(data)
+  local n = #data
+  for back = 1, math.min(3, n) do
+    local b = data:byte(n - back + 1)
+    if b >= 0xC0 then
+      local need = b >= 0xF0 and 4 or b >= 0xE0 and 3 or 2
+      return back < need and back or 0
+    elseif b < 0x80 then
+      return 0
+    end
   end
-  return data
+  return 0
+end
+
+--- Асинхронное чтение новых байтов с запомненного смещения читателя `t` порциями по
+--- `M.CHUNK` байт (кусок вывода, строки не разбираются). `on_text(text)` получает порцию в
+--- обычном контексте Neovim; незаконченная последовательность UTF-8 в конце порции
+--- переносится в следующую, а в конце файла остаётся непрочитанной (смещение стоит перед
+--- ней). Следующая порция запрашивается после обработки предыдущей. `on_done(found)` —
+--- после конца файла; `found = false` — файла нет. Когда `cancelled()` возвращает true,
+--- чтение прекращается без дальнейших вызовов, дескриптор закрывается.
+function M.read_chunks_async(t, on_text, on_done, cancelled)
+  local fd, pos
+  local carry = "" -- байты незаконченного символа, ещё не отданные
+  local function stopped()
+    return cancelled ~= nil and cancelled()
+  end
+  local function finish(found)
+    if fd then
+      uv.fs_close(fd, function() end)
+      fd = nil
+    end
+    if found ~= nil and not stopped() then
+      on_done(found)
+    end
+  end
+  local step
+  local function on_read(err, data)
+    vim.schedule(function()
+      if stopped() then
+        finish(nil)
+        return
+      end
+      if err or not data or data == "" then
+        finish(true)
+        return
+      end
+      data = carry .. data
+      pos = pos + #data - #carry
+      local keep = utf8_tail(data)
+      carry = keep > 0 and data:sub(-keep) or ""
+      local text = keep > 0 and data:sub(1, #data - keep) or data
+      if text ~= "" then
+        t.offset = pos - #carry
+        on_text(text)
+        if stopped() then
+          finish(nil)
+          return
+        end
+      end
+      step()
+    end)
+  end
+  step = function()
+    uv.fs_read(fd, M.CHUNK, pos, on_read)
+  end
+  uv.fs_open(t.path, "r", 438, function(err, f)
+    if err or not f then
+      vim.schedule(function()
+        finish(false)
+      end)
+      return
+    end
+    fd = f
+    uv.fs_fstat(f, function(serr, st)
+      vim.schedule(function()
+        if stopped() then
+          finish(nil)
+          return
+        end
+        if serr or not st then
+          finish(false)
+          return
+        end
+        if st.size < t.offset then
+          t.offset = 0
+        end
+        pos = t.offset
+        step()
+      end)
+    end)
+  end)
 end
 
 --- Наблюдение за путём (`vim.uv.new_fs_event`). `cb(filename, events)` вызывается в обычном

@@ -74,17 +74,53 @@ function M.reply(rec)
   return nil
 end
 
+-- Строка может быть записью реплики: в ней есть тип записи `user` или `assistant`.
+-- Проверка без разбора JSON (запись другого вида не разбирается вовсе); строка, прошедшая
+-- проверку, разбирается полностью.
+local function maybe_user(line)
+  return line:find('"type"%s*:%s*"user"') ~= nil
+end
+
+local function maybe_reply(line)
+  return maybe_user(line) or line:find('"type"%s*:%s*"assistant"') ~= nil
+end
+
 --- Реплики из списка строк транскрипта.
 function M.replies(lines)
   local out = {}
   for _, line in ipairs(lines) do
-    local rec = M.decode(line)
+    local rec = maybe_reply(line) and M.decode(line)
     local r = rec and M.reply(rec)
     if r then
       out[#out + 1] = r
     end
   end
   return out
+end
+
+--- Текст первой реплики пользователя среди строк или nil.
+function M.first_user_text(lines)
+  for _, line in ipairs(lines) do
+    local rec = maybe_user(line) and M.decode(line)
+    local r = rec and M.reply(rec)
+    if r and r.role == "user" then
+      return r.text
+    end
+  end
+  return nil
+end
+
+--- Рабочий каталог — поле `cwd` первой записи среди строк, где оно есть, или nil.
+function M.cwd(lines)
+  for _, line in ipairs(lines) do
+    if line:find('"cwd"', 1, true) then
+      local rec = M.decode(line)
+      if rec and type(rec.cwd) == "string" and rec.cwd ~= "" then
+        return rec.cwd
+      end
+    end
+  end
+  return nil
 end
 
 local STATUSES = { completed = true, failed = true, killed = true }

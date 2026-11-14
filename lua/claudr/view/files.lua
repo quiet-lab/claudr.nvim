@@ -59,8 +59,8 @@ local function subagent_path(node)
   return data.subagent_transcript(sid, agent_id)
 end
 
---- Транскрипт субагента: работающий дополняется по мере записи, завершённый показывается
---- целиком без слежения.
+--- Транскрипт субагента: работающий дополняется по мере записи, завершённый читается
+--- асинхронно порциями (`v.loaded` — чтение закончено) без слежения.
 function M.open_subagent(node)
   local v = new_view("subagent", node, "субагент: ")
   local path = subagent_path(node)
@@ -85,13 +85,25 @@ function M.open_subagent(node)
       follow_end(v)
     end)
   else
-    local replies = data.read_dialogue(path)
-    if not replies then
-      window.set_lines(v.buf, { "[транскрипт субагента недоступен]" })
-    else
-      window.set_lines(v.buf, #replies > 0 and reply_lines(replies) or { "" })
+    -- чтение асинхронное порциями: окно показывает прочитанное; закрытие вида его прекращает
+    local shown = 0
+    data.read_dialogue(path, function(replies)
+      shown = shown + #replies
+      window.append_lines(v.buf, reply_lines(replies))
+    end, function(found)
+      if not found then
+        window.set_lines(
+          v.buf,
+          { "[транскрипт субагента недоступен]" }
+        )
+      elseif shown == 0 then
+        window.set_lines(v.buf, { "" })
+      end
+      v.loaded = true
       follow_end(v)
-    end
+    end, function()
+      return v.released == true
+    end)
   end
   return v
 end

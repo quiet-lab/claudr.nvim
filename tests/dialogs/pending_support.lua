@@ -10,6 +10,7 @@ local herdr = require("claudr.herdr")
 local model = require("claudr.tree.model")
 local config = require("claudr.config")
 local pending = require("claudr.dialogs.pending")
+local match = require("claudr.dialogs.match")
 local socket = require("claudr.dialogs.socket")
 
 local M = {}
@@ -176,7 +177,12 @@ function M.request(input, env)
   t.wait(function()
     return #pending.list() > before
   end, "запрос в перечне")
-  return h, pending.list()[before + 1]
+  local req = pending.list()[before + 1]
+  -- записанное в транскрипте к приёму запроса читается асинхронно
+  t.wait(function()
+    return match._joined(req)
+  end, "запрос принят сопоставлением")
+  return h, req
 end
 
 --- Ждёт, пока запрос не окажется в состоянии `state`.

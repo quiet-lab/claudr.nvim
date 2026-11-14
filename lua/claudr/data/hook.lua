@@ -179,7 +179,11 @@ function M.events(lines)
   local decode = require("claudr.data.parse").decode
   local out = {}
   for _, line in ipairs(lines or {}) do
-    local rec = decode(line)
+    -- запись другого вида (в ней нет ни вызовов, ни результатов, ни решения) не разбирается
+    local relevant = line:find("tool_use", 1, true)
+      or line:find("tool_result", 1, true)
+      or line:find("hook_permission_decision", 1, true)
+    local rec = relevant and decode(line)
     if rec then
       for _, u in ipairs(M.tool_uses(rec)) do
         out[#out + 1] = { type = "call", id = u.id, name = u.name, input = u.input }

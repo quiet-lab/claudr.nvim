@@ -6,6 +6,8 @@ local s = require("dialogs.pending_support")
 local pending = require("claudr.dialogs.pending")
 local match = require("claudr.dialogs.match")
 local model = require("claudr.tree.model")
+local fs = require("claudr.data.fs")
+local du = require("data.util")
 
 local ids = s.samples.tool_use_ids
 
@@ -21,7 +23,7 @@ describe("Идентификатор вызова", function()
   it("Запись уже есть", function()
     s.env({ records = s.records("bash-pending") })
     local _, req = s.request(s.input("permission-bash"))
-    t.eq(req.tool_use_id, ids.bash)
+    t.eq(s.wait_id(req), ids.bash)
   end)
 
   it("Запись позже запроса", function()
@@ -68,8 +70,8 @@ describe("Идентификатор вызова", function()
       -- запрос второго вызова пришёл первым: порядок хуков ключом не служит
       local _, b = s.request(s.input("permission-read", { file_path = "/etc/hosts" }))
       local _, a = s.request(s.input("permission-read"))
-      t.eq(a.tool_use_id, ids.read1)
-      t.eq(b.tool_use_id, ids.read2)
+      t.eq(s.wait_id(a), ids.read1)
+      t.eq(s.wait_id(b), ids.read2)
     end
   )
 
@@ -87,8 +89,8 @@ describe("Идентификатор вызова", function()
       })
       local _, a = s.request(s.input("permission-bash"))
       local _, b = s.request(s.input("permission-bash"))
-      t.eq(a.tool_use_id, "toolu_same1")
-      t.eq(b.tool_use_id, "toolu_same2")
+      t.eq(s.wait_id(a), "toolu_same1")
+      t.eq(s.wait_id(b), "toolu_same2")
     end
   )
 
@@ -119,7 +121,7 @@ describe("Закрытие по результату вызова", function()
   it("Ответ в панели", function()
     s.env({ records = s.records("bash-answered-panel", 1, 2) })
     local h, req = s.request(s.input("permission-bash"))
-    t.eq(req.tool_use_id, ids.bash)
+    t.eq(s.wait_id(req), ids.bash)
     s.append(s.transcript(), s.records("bash-answered-panel", 3, 3))
     s.wait_state(req, "answered_elsewhere")
     h:wait_closed()
@@ -146,7 +148,7 @@ describe("Закрытие по результату вызова", function()
       local h, req = s.request(s.input("permission-bash"))
       s.append(s.transcript(), s.records("bash-answered-panel", 2, 3))
       s.wait_state(req, "answered_elsewhere")
-      t.eq(req.tool_use_id, ids.bash)
+      t.eq(s.wait_id(req), ids.bash)
       h:wait_closed()
     end
   )
@@ -193,7 +195,7 @@ describe("Закрытие по результату вызова", function()
     function()
       s.env({ subagent = true, sub_records = s.records("subagent", 1, 2) })
       local h, req = s.request(s.input("subagent"))
-      t.eq(req.tool_use_id, ids.sub)
+      t.eq(s.wait_id(req), ids.sub)
       s.append(s.sub_transcript(), s.records("subagent", 4, 4))
       s.wait_state(req, "answered_elsewhere")
       h:wait_closed()
@@ -269,4 +271,47 @@ describe("План правится в том же сообщении", function
     s.settle()
     t.eq(req.tool_use_id, nil)
   end)
+end)
+
+describe("Чтение транскрипта наблюдателем", function()
+  it(
+    "track возвращается до чтения; записанное читается порциями",
+    function()
+      local orig_chunk = fs.CHUNK
+      fs.CHUNK = 8 * 1024
+      s.env({ records = s.records("bash-pending") })
+      local input = s.input("permission-bash")
+      local filler = {}
+      for i = 1, 150 do
+        vim.list_extend(filler, du.filler_records(input.session_id, i, "Read", 4096))
+      end
+      s.append(s.transcript(), filler)
+      local reads = du.count_reads()
+      local events = {}
+      local req = {
+        session_id = input.session_id,
+        tool_name = input.tool_name,
+        tool_input = input.tool_input,
+      }
+      match.track(req, function(_, ev, value)
+        events[#events + 1] = { ev, value }
+      end)
+      t.eq(reads.read, 0, "при возврате транскрипт не читается")
+      t.ok(not match._joined(req), "запрос ещё не принят")
+      t.eq(events, {})
+      t.wait(function()
+        return match._joined(req)
+      end, "запрос принят сопоставлением")
+      t.ok(reads.read > 5, "прочитано порциями: " .. reads.read)
+      -- вызов записан до запроса, результата нет: идентификатор вызова придёт
+      t.wait(function()
+        return #events > 0
+      end, "идентификатор вызова")
+      t.eq(events[1], { "tool_use_id", ids.bash })
+      match.untrack(req)
+      du.settle()
+      reads.restore()
+      fs.CHUNK = orig_chunk
+    end
+  )
 end)

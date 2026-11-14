@@ -58,57 +58,82 @@ function M.project_dir(session_id)
   return path and fs.dirname(path) or nil
 end
 
---- Рабочий каталог сессии по первой записи транскрипта с полем `cwd` или nil.
-function M.session_cwd(path)
-  local f = io.open(path, "r")
-  if not f then
-    return nil
+-- Строки порции текста (каждая оканчивается переводом строки), без пустых.
+local function split_lines(text)
+  local lines = {}
+  for line in text:gmatch("([^\n]*)\n") do
+    if line ~= "" then
+      lines[#lines + 1] = line
+    end
   end
+  return lines
+end
+
+-- Читает строки файла асинхронно порциями, пока `on_lines(lines)` не вернёт true (тогда
+-- чтение прекращается) или файл не кончится. `on_done(found)` — один раз после этого, если
+-- чтение не отменено (`cancelled()`); `found = false` — файла нет. Дескриптор закрывается
+-- при любом исходе.
+local function scan_lines(path, on_lines, on_done, cancelled)
+  local stop = false
+  fs.read_lines_async(fs.tail(path), function(text)
+    if stop then
+      return
+    end
+    if on_lines(split_lines(text)) then
+      stop = true
+      if not (cancelled and cancelled()) then
+        on_done(true)
+      end
+    end
+  end, function(found)
+    if not stop then
+      on_done(found)
+    end
+  end, function()
+    return stop or (cancelled ~= nil and cancelled())
+  end)
+end
+
+--- Рабочий каталог сессии по первой записи транскрипта с полем `cwd`: `cb(cwd|nil)` после
+--- асинхронного чтения (чтение останавливается на найденной записи; отмена — без вызова).
+function M.session_cwd(path, cb, cancelled)
   local cwd
-  for line in f:lines() do
-    local rec = parse.decode(line)
-    if rec and type(rec.cwd) == "string" and rec.cwd ~= "" then
-      cwd = rec.cwd
-      break
+  scan_lines(path, function(lines)
+    cwd = parse.cwd(lines)
+    return cwd ~= nil
+  end, function()
+    cb(cwd)
+  end, cancelled)
+end
+
+--- Реплики диалога транскрипта по порядку записи, асинхронно порциями: `on_replies(replies)`
+--- получает реплики каждой порции (пустые порции пропускаются), `on_done(found)` — после
+--- конца файла; `found = false` — файла нет (`unavailable`). Отмена — `cancelled()`: чтение
+--- прекращается без дальнейших вызовов.
+function M.read_dialogue(path, on_replies, on_done, cancelled)
+  fs.read_lines_async(fs.tail(path), function(text)
+    local replies = parse.replies(split_lines(text))
+    if #replies > 0 then
+      on_replies(replies)
     end
-  end
-  f:close()
-  return cwd
+  end, on_done, cancelled)
 end
 
---- Реплики диалога транскрипта по порядку записи: `{ {role = "user"|"assistant", text}, … }`;
---- файла нет — `nil, "unavailable"`.
-function M.read_dialogue(path)
-  local t = fs.tail(path)
-  local lines = fs.read_lines(t)
-  if not lines then
-    return nil, "unavailable"
-  end
-  return parse.replies(lines)
-end
-
--- Текст первой реплики пользователя транскрипта (чтение до неё) или nil.
-local function first_user_text(path)
-  local f = io.open(path, "r")
-  if not f then
-    return nil
-  end
+-- Текст первой реплики пользователя транскрипта (чтение до неё): `cb(text|nil)`.
+local function first_user_text(path, cb, cancelled)
   local text
-  for line in f:lines() do
-    local rec = parse.decode(line)
-    local r = rec and parse.reply(rec)
-    if r and r.role == "user" then
-      text = r.text
-      break
-    end
-  end
-  f:close()
-  return text
+  scan_lines(path, function(lines)
+    text = parse.first_user_text(lines)
+    return text ~= nil
+  end, function()
+    cb(text)
+  end, cancelled)
 end
 
---- Сессии каталога проекта — существующие файлы `<id>.jsonl`:
---- `{ {id, path, mtime (секунды), first_user_text|nil}, … }`, новые первыми.
-function M.list_sessions(project_dir)
+--- Сессии каталога проекта — существующие файлы `<id>.jsonl`, асинхронно: `on_done(list)`,
+--- `list = { {id, path, mtime (секунды), first_user_text|nil}, … }`, новые первыми.
+--- Начала первых реплик читаются по одному файлу за раз. Отмена — `cancelled()`: без вызова.
+function M.list_sessions(project_dir, on_done, cancelled)
   local out = {}
   for _, e in ipairs(fs.list_dir(project_dir)) do
     local id = e.type == "file" and e.name:match("^(.+)%.jsonl$")
@@ -116,22 +141,38 @@ function M.list_sessions(project_dir)
       local path = project_dir .. "/" .. e.name
       local st = uv.fs_stat(path)
       if st then
-        out[#out + 1] = {
-          id = id,
-          path = path,
-          mtime = st.mtime.sec,
-          first_user_text = first_user_text(path),
-        }
+        out[#out + 1] = { id = id, path = path, mtime = st.mtime.sec }
       end
     end
   end
-  table.sort(out, function(a, b)
-    if a.mtime ~= b.mtime then
-      return a.mtime > b.mtime
+  local i = 0
+  local function sorted()
+    table.sort(out, function(a, b)
+      if a.mtime ~= b.mtime then
+        return a.mtime > b.mtime
+      end
+      return a.id < b.id
+    end)
+    on_done(out)
+  end
+  local function nextfile()
+    i = i + 1
+    local s = out[i]
+    if not s then
+      sorted()
+      return
     end
-    return a.id < b.id
+    first_user_text(s.path, function(text)
+      s.first_user_text = text
+      nextfile()
+    end, cancelled)
+  end
+  -- первое чтение — отдельным шагом цикла: вызов возвращается до чтения
+  vim.schedule(function()
+    if not (cancelled and cancelled()) then
+      nextfile()
+    end
   end)
-  return out
 end
 
 --- Ожидание создания транскрипта: наблюдает `projects/` (или ближайший существующий предок)
@@ -328,23 +369,35 @@ function M.watch_session(session_id, on_change)
   return require("claudr.data.session").new(M, session_id, on_change)
 end
 
---- Следит за файлом вывода фоновой команды: `on_text(chunk)` получает сначала уже записанное,
---- затем дописанные куски с запомненного смещения. Файла нет — `nil, "unavailable"`
---- (каталог временный; статус и код выхода по-прежнему даёт watch_session).
+--- Следит за файлом вывода фоновой команды: `on_text(chunk)` получает сначала уже записанное
+--- (асинхронно, порциями), затем дописанные куски с запомненного смещения. Файла нет —
+--- `nil, "unavailable"` (каталог временный; статус и код выхода по-прежнему даёт
+--- watch_session).
 function M.watch_output(path, on_text)
   if type(path) ~= "string" or not fs.is_file(path) then
     return nil, "unavailable"
   end
   local h = { closed = false }
   local tail = fs.tail(path)
+  -- Чтение по одному за раз; уведомление во время чтения вызывает ещё одно после него.
+  local again = false
   local function pump()
     if h.closed then
       return
     end
-    local chunk = fs.read_chunk(tail)
-    if chunk and chunk ~= "" then
-      on_text(chunk)
+    if h.reading then
+      again = true
+      return
     end
+    h.reading, again = true, false
+    fs.read_chunks_async(tail, on_text, function()
+      h.reading = false
+      if again then
+        pump()
+      end
+    end, function()
+      return h.closed
+    end)
   end
   -- наблюдается сам файл: вывод фонового субагента — символьная ссылка на его транскрипт,
   -- уведомления приходят по файлу, на который она указывает
