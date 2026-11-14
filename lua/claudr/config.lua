@@ -6,6 +6,8 @@ local M = {}
 ---@field code_questions claudr.CodeQuestionsConfig
 local defaults = {
   show_finished = true,
+  -- клавиши ссылок на файлы в буферах плагина; `false` отключает клавишу
+  file_references = { preview = "K", open = "gd" },
   code_questions = {
     model = "sonnet",
     fork_from_base = false,
