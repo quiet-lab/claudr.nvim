@@ -1,5 +1,6 @@
 -- Запуск дополнительной сессии Claude Code (спецификация session-launch): вкладка и деление,
--- `agent.start`, ошибки, диалог доверия, идентификатор сессии, узел в дереве.
+-- `agent.start` без ожидания, готовность по состоянию панели, ошибки, диалог доверия,
+-- идентификатор сессии, узел в дереве.
 local t = require("helpers.t")
 local fixtures = require("helpers.fixtures")
 local ms = require("messaging.support")
@@ -193,33 +194,99 @@ describe("Рабочий каталог", function()
 end)
 
 describe("Запуск без блокировки Neovim", function()
-  it("Долгий запуск", function()
+  it("Агент запускается", function()
     local d = env()
     local rec = ms.stub({})
+    d:set_start_status("unknown")
     d:hold("agent.start")
     local finished = false
+    local result
     launch.launch({
       node = model.get("w1"),
       mode = "tab",
-      on_done = function()
-        finished = true
+      on_done = function(_, r)
+        finished, result = true, r
       end,
     })
-    -- вызов вернулся сразу; Neovim отзывчив, пока агент запускается
+    -- вызов вернулся сразу; Neovim отзывчив, пока сервер не ответил
     t.wait(function()
       return d:held_count("agent.start") == 1
     end, "agent.start удержан")
     t.eq(finished, false)
-    t.eq(ms.noted(rec, "запущена"), false)
     t.eq(vim.api.nvim_eval("1 + 1"), 2)
     d:release("agent.start")
     t.wait(function()
       return finished
-    end, "готовность агента")
+    end, "ответ agent.start")
+    t.eq(d:last("agent.start").params.timeout_ms, nil, "без timeout_ms")
     t.ok(
-      ms.noted(rec, "сессия Claude Code запущена"),
-      "сообщение по готовности"
+      ms.noted(rec, "запускается"),
+      "сообщение «агент запускается»"
     )
+    -- агент виден в дереве в состоянии unknown, о готовности не сообщается
+    s.wait_node(result.pane_id, function(n)
+      return n.pane_kind == "agent"
+    end, "панель с агентом")
+    t.eq(ms.noted(rec, "готов$"), false)
+    t.eq(vim.api.nvim_eval("1 + 1"), 2)
+  end)
+
+  it("Агент готов", function()
+    local d = env()
+    local rec = ms.stub({})
+    d:set_start_status("unknown")
+    local err, result = run({ node = model.get("w1"), mode = "tab" })
+    t.eq(err, nil)
+    t.ok(ms.noted(rec, "запускается"))
+    s.wait_node(result.pane_id, function(n)
+      return n.pane_kind == "agent"
+    end, "панель с агентом")
+    t.eq(ms.noted(rec, "готов$"), false)
+    d:set_agent_status(result.pane_id, "idle")
+    t.wait(function()
+      return ms.noted(rec, "агент в панели " .. result.pane_id .. " готов")
+    end, "сообщение о готовности")
+    -- дальнейшие смены состояния новых сообщений о запуске не дают
+    local n = #rec.notes
+    d:set_agent_status(result.pane_id, "working")
+    d:set_agent_status(result.pane_id, "idle")
+    s.wait_node(result.pane_id, function(node)
+      return node.state == "idle"
+    end, "узел снова idle")
+    d:set_agent_status(result.pane_id, "blocked")
+    s.wait_node(result.pane_id, function(node)
+      return node.state == "blocked"
+    end, "узел blocked")
+    t.eq(#rec.notes, n, "новых сообщений нет")
+  end)
+
+  it(
+    "Агент готов: состояние idle пришло до ответа agent.start",
+    function()
+      env()
+      local rec = ms.stub({})
+      local _, result = run({ node = model.get("w1"), mode = "tab" })
+      t.wait(function()
+        return ms.noted(rec, "агент в панели " .. result.pane_id .. " готов")
+      end, "сообщение о готовности")
+      t.ok(ms.noted(rec, "запускается"))
+    end
+  )
+
+  it("Панель закрыта до готовности", function()
+    local d = env()
+    local rec = ms.stub({})
+    d:set_start_status("unknown")
+    local _, result = run({ node = model.get("w1"), mode = "tab" })
+    s.wait_node(result.pane_id, function(n)
+      return n.pane_kind == "agent"
+    end, "панель с агентом")
+    d:pane_exited(result.pane_id, { vanish = true })
+    t.wait(function()
+      return ms.noted(rec, "закрыта", vim.log.levels.WARN)
+    end, "сообщение о закрытой панели")
+    t.eq(ms.noted(rec, "готов$"), false)
+    t.eq(d:count("agent.start"), 1)
   end)
 end)
 
@@ -261,12 +328,17 @@ describe("Агент не готов", function()
   it("Каталог без доверия", function()
     local d = env()
     local rec = ms.stub({})
-    d:fail("agent.start", "agent_not_ready")
+    d:set_start_status("blocked")
     local err, result = run({ node = model.get("w1"), mode = "tab" })
-    t.eq(err.code, "agent_not_ready")
-    t.ok(ms.noted(rec, "не готов"))
+    t.eq(err, nil)
+    t.ok(ms.noted(rec, "запускается"))
+    t.wait(function()
+      return ms.noted(rec, "не готов", vim.log.levels.WARN)
+    end, "сообщение «не готов»")
     t.ok(ms.noted(rec, "диалог доверия"))
     t.ok(ms.noted(rec, ":Claudr attach"))
+    t.ok(ms.noted(rec, ":Claudr keys"))
+    t.eq(ms.noted(rec, "агент в панели " .. result.pane_id .. " готов"), false)
     t.eq(d:count("agent.start"), 1, "повторного agent.start нет")
     local pane = s.wait_node(result.pane_id, function(n)
       return n.pane_kind == "agent" and n.state == "blocked"
@@ -276,22 +348,41 @@ describe("Агент не готов", function()
 
   it("Ответ на диалог", function()
     local d = env()
-    ms.stub({ input = { "down enter" } })
-    d:fail("agent.start", "agent_not_ready")
+    local rec = ms.stub({ input = { "down enter" } })
+    d:set_start_status("blocked")
     local _, result = run({ node = model.get("w1"), mode = "tab" })
     s.wait_node(result.pane_id, function(n)
       return n.state == "blocked"
     end)
-    -- ответ на диалог (в виде панели это ввод клавиш; здесь — клавиши методом сообщений)
+    t.wait(function()
+      return ms.noted(rec, "не готов")
+    end, "сообщение «не готов»")
+    -- ответ на диалог клавишами (:Claudr keys)
     messaging.send_keys({ pane_id = result.pane_id })
     t.wait(function()
       return d:count("pane.send_keys") == 1
     end, "pane.send_keys")
+    t.eq(d:last("pane.send_keys").params.keys, { "down", "enter" })
     d:set_agent_status(result.pane_id, "idle")
     s.wait_node(result.pane_id, function(n)
       return n.state == "idle"
     end, "узел панели показывает idle по событию")
     t.eq(d:count("agent.start"), 1)
+  end)
+
+  it("Сервер ответил agent_not_ready", function()
+    local d = env()
+    local rec = ms.stub({})
+    d:fail("agent.start", "agent_not_ready")
+    local err, result = run({ node = model.get("w1"), mode = "tab" })
+    t.eq(err.code, "agent_not_ready")
+    t.ok(ms.noted(rec, "agent.start: agent_not_ready", vim.log.levels.ERROR))
+    t.ok(ms.noted(rec, "is blocked during startup"), "текст ошибки сервера")
+    t.eq(ms.noted(rec, "запускается"), false)
+    t.eq(d:count("agent.start"), 1, "повторного agent.start нет")
+    s.wait_node(result.pane_id, function(n)
+      return n.pane_kind == "agent"
+    end, "панель остаётся")
   end)
 end)
 

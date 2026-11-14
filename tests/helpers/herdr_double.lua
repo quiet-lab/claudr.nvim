@@ -646,7 +646,10 @@ handlers["agent.prompt"] = function(self, params)
   return { type = "agent_prompted", agent = agent_record(copy(p), name) }
 end
 
--- Запуск агента в панели: запись в снимке и события, как у настоящего сервера.
+-- Запуск агента в панели: запись в снимке и события, как у настоящего сервера. Первое
+-- событие состояния — `unknown` без поля `agent`, затем `pane_agent_detected`; состояние
+-- `status` (кроме `unknown`) приходит следующим событием `pane.agent_status_changed`.
+-- Возвращает панель и запись агента на момент до смены состояния.
 function D:_start_agent(params, status)
   local p = self:_pane(params.pane_id)
   if not p then
@@ -656,7 +659,7 @@ function D:_start_agent(params, status)
   p.agent = kind
   p.display_agent = p.display_agent or "haiku"
   p.foreground_process = kind
-  p.agent_status = status
+  p.agent_status = "unknown"
   p.tokens = p.tokens or dict()
   p.agent_session = dict({
     agent = kind,
@@ -678,24 +681,36 @@ function D:_start_agent(params, status)
     pane_id = p.pane_id,
     workspace_id = p.workspace_id,
   })
-  self:emit("pane.agent_status_changed", {
-    agent = kind,
-    agent_status = status,
-    pane_id = p.pane_id,
-    workspace_id = p.workspace_id,
-  })
-  return p
+  local started = agent_record(copy(p), params.name)
+  if params.name then
+    started.interactive_ready = false
+  end
+  if status ~= "unknown" then
+    self:set_agent_status(p.pane_id, status)
+  end
+  return p, started
 end
 
+-- Без `timeout_ms` настоящий сервер отвечает сразу, готовности не ждёт: запись агента в
+-- состоянии `unknown`, состояние после запуска (`start_status`) приходит событием. С
+-- `timeout_ms` сервер ждёт: состояние `blocked` даёт ошибку `agent_not_ready` (агент
+-- остаётся в панели), иное — запись агента в этом состоянии.
 handlers["agent.start"] = function(self, params)
   if not self:_pane(params.pane_id) then
     return nil,
       "agent_pane_not_found",
       string.format(MESSAGES.agent_pane_not_found, tostring(params.pane_id))
   end
-  local p = self:_start_agent(params, "idle")
-  local rec = agent_record(copy(p), params.name)
-  rec.interactive_ready = true
+  local status = self.start_status
+  local p, rec = self:_start_agent(params, status)
+  if not is_nil(params.timeout_ms) then
+    if status == "blocked" then
+      return nil,
+        "agent_not_ready",
+        string.format(MESSAGES.agent_not_ready, params.name or params.pane_id)
+    end
+    rec = agent_record(copy(p), params.name)
+  end
   return { type = "agent_info", agent = rec }
 end
 
@@ -930,6 +945,13 @@ function D:set_output(pane_id, o)
   end
 end
 
+--- Состояние, которого агент достигает после `agent.start` (по умолчанию "idle"):
+--- "idle", "blocked" (диалог доверия) или "unknown" — состояние не меняется, пока тест
+--- не вызовет `set_agent_status`.
+function D:set_start_status(status)
+  self.start_status = status
+end
+
 --- Смена состояния агента панели: запись в снимке и событие `pane.agent_status_changed`.
 function D:set_agent_status(pane_id, status)
   local p = assert(self:_pane(pane_id), "нет панели " .. pane_id)
@@ -1120,6 +1142,7 @@ function M.start(opts)
     held = {},
     outputs = {},
     agent_names = {},
+    start_status = "idle",
   }, D)
   for _, sub in ipairs({ "", "/observe", "/attach" }) do
     uv.fs_mkdir(d.fake_dir .. sub, 493)

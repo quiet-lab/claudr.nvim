@@ -2,10 +2,11 @@
 --
 -- Новая вкладка: `tab.create` (без рабочего каталога), затем `agent.start` с видом `claude`
 -- в корневой панели созданной вкладки. Деление: `pane.split` выбранной панели, затем
--- `agent.start` в созданной. Вызовы асинхронные, Neovim остаётся отзывчивым; о результате
--- сообщается после ответа сервера. Созданное при ошибке не закрывается, повторного
--- `agent.start` нет. Появление узла в дереве — по событиям herdr, без особой обработки.
--- Таймеров и опроса нет.
+-- `agent.start` в созданной. `agent.start` идёт без `timeout_ms`: сервер отвечает сразу,
+-- плагин сообщает «агент запускается», а готовность (`idle`) или диалог доверия (`blocked`)
+-- узнаёт по состоянию панели в снимке, перечитанном по событию. Созданное при ошибке
+-- не закрывается, повторного `agent.start` нет. Появление узла в дереве — по событиям
+-- herdr, без особой обработки. Сроков, таймеров и опроса нет.
 local commands = require("claudr.commands")
 local herdr = require("claudr.herdr")
 
@@ -53,25 +54,84 @@ local function agent_name(pane_id)
   return "claudr-" .. pane_id:gsub("[^%w]+", "-")
 end
 
---- Запуск агента `claude` в панели `pane_id`. `agent_not_ready` — диалог доверия: панель
---- остаётся, повторного запуска нет.
+-- Запись панели `pane_id` в снимке или `nil`.
+local function find_pane(snapshot, pane_id)
+  for _, p in ipairs(snapshot and snapshot.panes or {}) do
+    if p.pane_id == pane_id then
+      return p
+    end
+  end
+end
+
+local READY_HINT = "ответьте на диалог подключением с вводом (:Claudr attach, клавиша i в дереве) "
+  .. "или клавишами (:Claudr keys, клавиша K в дереве); повторный запуск не выполняется"
+
+--- Слежение за готовностью агента в панели `pane_id` после ответа `agent.start`: по
+--- снимку, перечитанному после события `pane.agent_status_changed`. Первое из `idle`
+--- (готов), `blocked` (диалог доверия) или исчезновения панели даёт сообщение и снимает
+--- подписку. Сроков, таймеров и опроса нет.
+local function watch_ready(pane_id)
+  local seen = false
+  local unsubscribe
+  local function check(st, events)
+    if st.status ~= "connected" then
+      return false
+    end
+    local p = find_pane(st.snapshot, pane_id)
+    if p then
+      seen = true
+      if p.agent_status == "idle" then
+        notify(("claudr: агент в панели %s готов"):format(pane_id))
+        return true
+      elseif p.agent_status == "blocked" then
+        notify(
+          ("claudr: агент в панели %s не готов: ждёт ответа на диалог доверия к каталогу; %s"):format(
+            pane_id,
+            READY_HINT
+          ),
+          vim.log.levels.WARN
+        )
+        return true
+      end
+      return false
+    end
+    local closed = seen and not st.stale
+    for _, ev in ipairs(events or {}) do
+      if ev.event == "pane_closed" and type(ev.data) == "table" and ev.data.pane_id == pane_id then
+        closed = true
+      end
+    end
+    if closed then
+      notify(
+        ("claudr: панель %s закрыта до готовности агента"):format(
+          pane_id
+        ),
+        vim.log.levels.WARN
+      )
+    end
+    return closed
+  end
+  if check(herdr.state()) then
+    return
+  end
+  unsubscribe = herdr.subscribe(function(st, events)
+    if unsubscribe and check(st, events) then
+      unsubscribe()
+      unsubscribe = nil
+    end
+  end)
+end
+
+--- Запуск агента `claude` в панели `pane_id` без `timeout_ms`: сервер отвечает сразу, не
+--- дожидаясь готовности; готовность сообщает `watch_ready`. Ошибка сервера, в том числе
+--- `agent_not_ready`, показывается кодом и текстом; панель остаётся, повторного запуска нет.
 local function start_agent(pane_id, opts)
   herdr.request(
     "agent.start",
     { name = agent_name(pane_id), kind = M.KIND, pane_id = pane_id },
     function(err, result)
       if err then
-        if err.code == "agent_not_ready" then
-          notify(
-            (
-              "claudr: агент в панели %s не готов: ждёт ответа на диалог доверия к каталогу. "
-              .. "Панель оставлена, ответьте на диалог, подключившись к панели с вводом "
-              .. "(клавиша i в дереве или :Claudr attach); повторный запуск не выполняется. "
-              .. "Сообщение сервера: %s"
-            ):format(pane_id, tostring(err.message)),
-            vim.log.levels.WARN
-          )
-        elseif err.code == "server_unavailable" then
+        if err.code == "server_unavailable" then
           notify(
             ("claudr: сервер herdr недоступен: агент в панели %s не запущен, панель оставлена"):format(
               pane_id
@@ -81,7 +141,9 @@ local function start_agent(pane_id, opts)
         else
           notify(
             error_text("agent.start", err)
-              .. (" (панель %s оставлена)"):format(pane_id),
+              .. (" (панель %s оставлена, повторный запуск не выполняется)"):format(
+                pane_id
+              ),
             vim.log.levels.ERROR
           )
         end
@@ -90,13 +152,16 @@ local function start_agent(pane_id, opts)
       end
       local agent = result and result.agent or {}
       local session = type(agent.agent_session) == "table" and agent.agent_session.value or nil
-      local text = ("claudr: сессия Claude Code запущена в панели %s"):format(
+      local text = ("claudr: агент Claude Code запускается в панели %s"):format(
         pane_id
       )
-      if session then
+      if present(session) then
         text = text .. (" (сессия %s)"):format(session)
+      else
+        session = nil
       end
-      notify(text)
+      notify(text .. "…")
+      watch_ready(pane_id)
       done(opts, nil, { pane_id = pane_id, session_id = session, agent = agent })
     end
   )

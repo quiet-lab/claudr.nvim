@@ -551,7 +551,7 @@ describe("pane.send_keys и agent.*", function()
   end)
 
   it(
-    "agent.start отвечает agent_info с agent_session и даёт события",
+    "agent.start без timeout_ms отвечает agent_info сразу, состояние приходит событием",
     function()
       local sub = client()
       sub:call("events.subscribe", {
@@ -564,8 +564,8 @@ describe("pane.send_keys и agent.*", function()
       t.eq(f.result.type, "agent_info")
       local a = f.result.agent
       t.eq(a.name, "c1")
-      t.eq(a.agent_status, "idle")
-      t.eq(a.interactive_ready, true)
+      t.eq(a.agent_status, "unknown", "готовности сервер не ждёт")
+      t.eq(a.interactive_ready, false)
       t.eq(a.agent_session.source, "herdr:claude")
       t.ok(a.agent_session.value ~= "")
       t.wait(function()
@@ -575,15 +575,78 @@ describe("pane.send_keys и agent.*", function()
       t.eq(sub.frames[2].data.agent, nil)
       t.eq(sub.frames[2].data.agent_status, "unknown")
       t.eq(sub.frames[3].event, "pane_agent_detected")
+      t.eq(sub.frames[4].event, "pane.agent_status_changed")
       t.eq(sub.frames[4].data.agent_status, "idle")
       local s = client():call("session.snapshot").result.snapshot
       t.eq(s.panes[2].agent_session.value, a.agent_session.value)
+      t.eq(s.panes[2].agent_status, "idle")
       t.eq(client():call("agent.prompt", { target = "c1", text = "x" }).result.agent.name, "c1")
     end
   )
 
   it(
-    "agent_not_ready оставляет агента в панели в состоянии blocked",
+    "set_start_status blocked: ответ без ошибки, затем событие blocked",
+    function()
+      local sub = client()
+      sub:call("events.subscribe", {
+        subscriptions = { { type = "pane.agent_status_changed", pane_id = "w1:p2" } },
+      })
+      d:set_start_status("blocked")
+      local f = client():call("agent.start", { name = "c1", kind = "claude", pane_id = "w1:p2" })
+      t.eq(f.result.type, "agent_info")
+      t.eq(f.result.agent.agent_status, "unknown")
+      t.wait(function()
+        return #sub.frames == 3
+      end, "unknown, затем blocked")
+      t.eq(sub.frames[3].data.agent_status, "blocked")
+      local s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[2].agent_status, "blocked")
+    end
+  )
+
+  it(
+    "set_start_status unknown: состояние меняет только set_agent_status",
+    function()
+      d:set_start_status("unknown")
+      local f = client():call("agent.start", { name = "c1", kind = "claude", pane_id = "w1:p2" })
+      t.eq(f.result.type, "agent_info")
+      local s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[2].agent_status, "unknown")
+      t.eq(s.panes[2].agent, "claude")
+      d:set_agent_status("w1:p2", "idle")
+      s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[2].agent_status, "idle")
+    end
+  )
+
+  it(
+    "timeout_ms и состояние blocked — ошибка agent_not_ready, агент остаётся blocked",
+    function()
+      d:set_start_status("blocked")
+      local f = client():call(
+        "agent.start",
+        { name = "c1", kind = "claude", pane_id = "w1:p2", timeout_ms = 30000 }
+      )
+      t.eq(f.error, {
+        code = "agent_not_ready",
+        message = "agent c1 is blocked during startup and is not ready for prompts",
+      })
+      local s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[2].agent_status, "blocked")
+    end
+  )
+
+  it("timeout_ms и состояние idle — agent_info в состоянии idle", function()
+    local f = client():call(
+      "agent.start",
+      { name = "c1", kind = "claude", pane_id = "w1:p2", timeout_ms = 30000 }
+    )
+    t.eq(f.result.agent.agent_status, "idle")
+    t.eq(f.result.agent.interactive_ready, true)
+  end)
+
+  it(
+    "fail agent_not_ready оставляет агента в панели в состоянии blocked",
     function()
       d:fail("agent.start", "agent_not_ready")
       local f = client():call("agent.start", { name = "c1", kind = "claude", pane_id = "w1:p2" })
