@@ -72,6 +72,7 @@ local S = {
   reading = false,
   dirty = false,
   watcher = nil,
+  events = 0, -- число полученных событий (для тестов)
 }
 
 local subscribers = {}
@@ -228,6 +229,7 @@ end
 local refresh
 
 local function on_event(frame)
+  S.events = S.events + 1
   local ev = { event = frame.event, data = frame.data }
   for _, s in ipairs(subscribers) do
     if s.active then
@@ -564,6 +566,11 @@ function M.session_id(pane)
     return s.value
   end
   return nil
+end
+
+-- Только для тестов: число полученных событий.
+function M._events()
+  return S.events
 end
 
 -- Только для тестов: идёт ли чтение снимка и ждёт ли оно повторного.

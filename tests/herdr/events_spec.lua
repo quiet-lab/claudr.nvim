@@ -361,3 +361,42 @@ describe("Потеря событий", function()
     t.ok(sub_i and snap_i, "подписка, затем снимок")
   end)
 end)
+
+describe("Поток событий вывода панели", function()
+  it(
+    "события вывода во время чтения снимка сливаются в одно следующее чтение",
+    function()
+      local before = d:count("session.snapshot")
+      local seen = herdr._events()
+      d:hold("session.snapshot")
+      d:emit("pane.output_changed", { pane_id = "w1:p1", revision = 1 })
+      t.wait(function()
+        return d:held_count("session.snapshot") == 1
+      end, "чтение снимка начато")
+      for i = 2, 30 do
+        t.eq(d:emit("pane.output_changed", { pane_id = "w1:p1", revision = i }), 1)
+      end
+      t.wait(function()
+        return herdr._events() == seen + 30
+      end, "события получены")
+      t.eq(
+        d:count("session.snapshot"),
+        before + 1,
+        "второй запрос не послан, пока идёт первый"
+      )
+      d:release("session.snapshot")
+      wait_idle()
+      print(
+        string.format(
+          "  замер: запросов снимка на 30 событий вывода — %d",
+          d:count("session.snapshot") - before
+        )
+      )
+      t.eq(
+        d:count("session.snapshot"),
+        before + 2,
+        "одно чтение и одно следующее"
+      )
+    end
+  )
+end)
