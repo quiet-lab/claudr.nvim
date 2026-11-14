@@ -195,10 +195,10 @@ end
 function M.topic_items(project_dir)
   local items = {}
   for _, rec in ipairs(registry.list(project_dir or M.project_dir())) do
+    -- содержимое есть, пока есть транскрипт сессии или тема ещё отвечает
     local loaded = topic_mod.get(rec.session_id)
-    local available = (
-      loaded and (loaded.proc ~= nil or #loaded.entries > 0 and not loaded.unavailable)
-    ) or topic_mod.transcript(rec.session_id) ~= nil
+    local available = topic_mod.transcript(rec.session_id) ~= nil
+      or (loaded ~= nil and loaded.proc ~= nil)
     items[#items + 1] = { record = rec, unavailable = not available }
   end
   return items

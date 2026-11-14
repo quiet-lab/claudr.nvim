@@ -50,8 +50,9 @@ function M.edit(path, line, col)
   return vim.api.nvim_get_current_buf()
 end
 
---- Чистое состояние: модуль, реестр, буферы тем, настройки.
-function M.reset(opts)
+--- Чистое состояние: модуль, реестр, буферы тем, настройки. С `keep_registry` — как после
+--- перезапуска Neovim: реестр и транскрипты остаются.
+function M.reset(opts, keep_registry)
   vim.cmd("silent! only")
   vim.cmd("enew")
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -61,7 +62,9 @@ function M.reset(opts)
   end
   require("claudr.questions.topic")._reset()
   require("claudr.questions.context").unregister()
-  vim.fn.delete(require("claudr.questions.registry").path())
+  if not keep_registry then
+    vim.fn.delete(require("claudr.questions.registry").path())
+  end
   require("claudr").setup(opts)
 end
 

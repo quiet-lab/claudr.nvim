@@ -9,14 +9,18 @@ local defaults = {
   code_questions = {
     model = "sonnet",
     fork_from_base = false,
-    -- mcp не задан по умолчанию: без MCP-сервера проекта плагин работает.
+    -- base_session не задана: ответвляться не от чего, пока её не задали.
+    -- mcp не задан по умолчанию: без MCP-сервера проекта плагин работает. Значение —
+    -- описание `{ mcpServers = {…} }`, таблица «каталог проекта → описание» или
+    -- функция `fn(project_dir) -> описание|nil`.
   },
 }
 
 ---@class claudr.CodeQuestionsConfig
 ---@field model string модель отвечающего процесса
 ---@field fork_from_base boolean ответвлять новую тему от базовой сессии проекта
----@field mcp table|nil описание MCP-сервера проекта (необязательно)
+---@field base_session string|table|function|nil базовая сессия для fork_from_base
+---@field mcp table|function|nil MCP-сервер проекта как источник знаний (необязательно)
 
 local current = vim.deepcopy(defaults)
 

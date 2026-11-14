@@ -325,7 +325,11 @@ start = function(topic, entry)
     end,
     stderr = function(_, data)
       if data then
+        -- для причины ошибки нужен только конец вывода ошибок
         stderr[#stderr + 1] = data
+        if #stderr > 64 then
+          stderr = { table.concat(stderr):sub(-4096) }
+        end
       end
     end,
   }, function(res)
