@@ -317,6 +317,25 @@ describe("Состояния субагентов и команд", function()
   )
 end)
 
+describe("Отметка завершения владельца", function()
+  it(
+    "pane_exited без сессии не обрывает сессию, начатую позже",
+    function()
+      local d = s.env(s.snapshot({ double.pane({ pane_id = "w1:p1" }) }))
+      s.wait_node("w1:p1")
+      d:pane_exited("w1:p1")
+      t.wait(function()
+        return model._exited()["w1:p1"] ~= nil
+      end, "модель получила pane_exited")
+      d.handlers["agent.start"](d, { pane_id = "w1:p1", kind = "claude" })
+      s.wait_node("w1:p1", function(n)
+        return n.pane_kind == "agent" and model._sessions()["w1:p1"] ~= nil
+      end, "сессия нового агента")
+      t.eq(model._sessions()["w1:p1"].alive, true)
+    end
+  )
+end)
+
 describe("Завершённые узлы", function()
   it("Завершённый узел остаётся", function()
     local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")

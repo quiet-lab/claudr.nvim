@@ -32,8 +32,10 @@ local S = {
   snapshot = { workspaces = {}, tabs = {}, panes = {} },
   -- панель → { sid, handle, alive }: слежение за сессией Claude Code панели
   sessions = {},
-  -- панели, для которых пришло `pane_exited`: процесс панели завершён
+  -- панель → номер вызова подписчика herdr, в котором пришло `pane_exited`: процесс панели
+  -- завершён
   exited = {},
+  batch = 0,
   syncing = false,
 }
 
@@ -154,6 +156,10 @@ local function sync_sessions(panes)
       s = nil
     end
     if sid and not s then
+      -- `pane_exited` из прежних вызовов относится к процессу без этой сессии
+      if S.exited[id] and S.exited[id] ~= S.batch then
+        S.exited[id] = nil
+      end
       open_session(id, sid)
       s = S.sessions[id]
     elseif not sid and s and not S.exited[id] then
@@ -372,9 +378,10 @@ rebuild = function()
 end
 
 local function on_herdr(state, events)
+  S.batch = S.batch + 1
   for _, ev in ipairs(events or {}) do
     if ev.event == "pane_exited" and type(ev.data) == "table" and present(ev.data.pane_id) then
-      S.exited[ev.data.pane_id] = true
+      S.exited[ev.data.pane_id] = S.batch
     end
   end
   S.status = { status = state.status, message = state.message }
@@ -527,6 +534,16 @@ end
 -- Только для тестов: слежение за сессиями по панелям.
 function M._sessions()
   return S.sessions
+end
+
+-- Только для тестов: панели с полученным `pane_exited`.
+function M._exited()
+  return S.exited
+end
+
+-- Только для тестов: панели с полученным `pane_exited`.
+function M._exited()
+  return S.exited
 end
 
 return M
