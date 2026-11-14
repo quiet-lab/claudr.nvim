@@ -3,9 +3,18 @@ local M = {}
 
 ---@class claudr.Config
 ---@field show_finished boolean показывать завершённые субагенты и фоновые команды в дереве
+---@field message_input claudr.MessageInputConfig
 ---@field code_questions claudr.CodeQuestionsConfig
 local defaults = {
   show_finished = true,
+  message_input = {
+    -- клавиши отправки в окне ввода (нормальный режим и режим вставки); `:w` работает всегда
+    send = { "<S-CR>", "<S-Space>" },
+    -- ведущий пробел перед текстом, начинающимся с «/» или «!» (решение D31)
+    guard_commands = false,
+    -- клавиша окна ввода в виде панели; `false` — не назначать
+    key = "m",
+  },
   code_questions = {
     model = "sonnet",
     fork_from_base = false,
@@ -14,6 +23,11 @@ local defaults = {
     -- функция `fn(project_dir) -> описание|nil`.
   },
 }
+
+---@class claudr.MessageInputConfig
+---@field send string[] клавиши отправки в окне ввода
+---@field guard_commands boolean добавлять ведущий пробел к тексту, начинающемуся с «/» или «!»
+---@field key string|false клавиша окна ввода в виде панели
 
 ---@class claudr.CodeQuestionsConfig
 ---@field model string модель отвечающего процесса
