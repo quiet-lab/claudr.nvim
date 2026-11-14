@@ -1,0 +1,5 @@
+#!/bin/sh
+# Поддельный herdr для тестов: подкоманды `terminal session observe` и `terminal attach`.
+# Устройство и управление — tests/helpers/fake_herdr/main.lua и tests/helpers/herdr_double.lua.
+here=$(cd "$(dirname "$0")" && pwd)
+exec nvim --clean --headless -l "$here/../fake_herdr/main.lua" "$@"

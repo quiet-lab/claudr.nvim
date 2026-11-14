@@ -1,0 +1,1 @@
+{"agentType":"general-purpose","isBuiltIn":true,"description":"Проверка фонового Bash с кодом выхода","toolUseId":"toolu_01Fixture000000000000011","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true,"model":"haiku","pickedEffortModel":"claude-haiku-5-5","finished":true}
