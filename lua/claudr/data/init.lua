@@ -58,6 +58,24 @@ function M.project_dir(session_id)
   return path and fs.dirname(path) or nil
 end
 
+--- Рабочий каталог сессии по первой записи транскрипта с полем `cwd` или nil.
+function M.session_cwd(path)
+  local f = io.open(path, "r")
+  if not f then
+    return nil
+  end
+  local cwd
+  for line in f:lines() do
+    local rec = parse.decode(line)
+    if rec and type(rec.cwd) == "string" and rec.cwd ~= "" then
+      cwd = rec.cwd
+      break
+    end
+  end
+  f:close()
+  return cwd
+end
+
 --- Реплики диалога транскрипта по порядку записи: `{ {role = "user"|"assistant", text}, … }`;
 --- файла нет — `nil, "unavailable"`.
 function M.read_dialogue(path)

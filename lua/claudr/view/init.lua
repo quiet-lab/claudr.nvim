@@ -21,9 +21,27 @@ local function pane_only(node, what)
   return true
 end
 
+-- Рабочий каталог сессии владельца вида: `cwd` панели (для субагента и фоновой команды —
+-- панели-владельца).
+local function owner_cwd(node_id)
+  local node = model.get(node_id)
+  if node and node.kind ~= "pane" then
+    node = node.owner_pane and model.get(node.owner_pane)
+  end
+  local d = node and node.data
+  return d and (d.cwd or d.foreground_cwd) or nil
+end
+
 local function add_view_keys(v)
   if not v or not vim.api.nvim_buf_is_valid(v.buf) then
     return v
+  end
+  if v.kind ~= "scrollback" then
+    require("claudr.refs").attach(v.buf, {
+      cwd = function()
+        return owner_cwd(v.node_id)
+      end,
+    })
   end
   local function map(key, fn, desc)
     vim.keymap.set("n", key, function()
