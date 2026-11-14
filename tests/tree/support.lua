@@ -1,4 +1,5 @@
--- Общие помощники тестов дерева: двойник herdr, образцы Claude Code, запуск модели.
+-- Общие помощники тестов дерева: двойник herdr, образцы Claude Code, запуск модели, заглушка
+-- значков herdr и записывающая фабрика таймера кадров.
 local t = require("helpers.t")
 local double = require("helpers.herdr_double")
 local fixtures = require("helpers.fixtures")
@@ -9,6 +10,103 @@ local model = require("claudr.tree.model")
 local config = require("claudr.config")
 
 local M = {}
+
+-- Синтетическая таблица значков: `working` — три кадра, остальные — по одному.
+M.ICONS = {
+  idle = { frames = { "i" }, period = 400 },
+  working = { frames = { "w0", "w1", "w2" }, period = 100 },
+  blocked = { frames = { "b" }, period = 400 },
+  done = { frames = { "d" }, period = 400 },
+  unknown = { frames = { "u" }, period = 400 },
+}
+
+--- Заглушка модуля `claudr.herdr.icons` с подсчётом подписок. `icons` — таблица значков (по
+--- умолчанию `M.ICONS`). Возвращает заглушку: `subs` — действующие подписки, `subscribed` и
+--- `unsubscribed` — счётчики, `set(icons)` — смена значков с вызовом подписчиков.
+function M.stub_icons(icons)
+  local stub =
+    { table = vim.deepcopy(icons or M.ICONS), subs = {}, subscribed = 0, unsubscribed = 0 }
+  function stub.get()
+    return stub.table
+  end
+  function stub.watching()
+    return false
+  end
+  function stub.subscribe(fn)
+    stub.subscribed = stub.subscribed + 1
+    local rec = { fn = fn }
+    stub.subs[#stub.subs + 1] = rec
+    return function()
+      for i, x in ipairs(stub.subs) do
+        if x == rec then
+          table.remove(stub.subs, i)
+          stub.unsubscribed = stub.unsubscribed + 1
+          break
+        end
+      end
+    end
+  end
+  function stub.set(new)
+    stub.table = vim.deepcopy(new)
+    for _, rec in ipairs({ unpack(stub.subs) }) do
+      rec.fn()
+    end
+  end
+  package.loaded["claudr.herdr.icons"] = stub
+  return stub
+end
+
+-- Модуля значков в ветви может ещё не быть (он пишется отдельно): тестам, которые открывают
+-- дерево, подставляется заглушка; при наличии модуля используется он.
+if
+  not package.loaded["claudr.herdr.icons"]
+  and not package.searchpath("claudr.herdr.icons", package.path)
+then
+  M.stub_icons()
+end
+
+--- Записывающая фабрика таймера кадров: `timers` — созданные таймеры с журналом `calls`
+--- (`start`, `stop`, `close`). `active()` — есть ли заведённый и не закрытый таймер.
+function M.timer_recorder()
+  local rec = { timers = {}, calls = {} }
+  function rec.factory()
+    local tm = { started = false, closed = false }
+    function tm:start(delay, rep, cb)
+      assert(not self.closed, "start закрытого таймера")
+      self.started, self.delay, self.rep, self.cb = true, delay, rep, cb
+      rec.calls[#rec.calls + 1] = { "start", delay, rep }
+    end
+    function tm:stop()
+      self.started = false
+      rec.calls[#rec.calls + 1] = { "stop" }
+    end
+    function tm:close()
+      self.closed = true
+      self.started = false
+      rec.calls[#rec.calls + 1] = { "close" }
+    end
+    rec.timers[#rec.timers + 1] = tm
+    return tm
+  end
+  function rec.active()
+    for _, tm in ipairs(rec.timers) do
+      if tm.started and not tm.closed then
+        return tm
+      end
+    end
+    return nil
+  end
+  function rec.count(name)
+    local n = 0
+    for _, c in ipairs(rec.calls) do
+      if c[1] == name then
+        n = n + 1
+      end
+    end
+    return n
+  end
+  return rec
+end
 
 M.double = double
 M.fixtures = fixtures

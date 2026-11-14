@@ -1,10 +1,14 @@
--- Отображение дерева (спецификация agent-tree, решения D2 и D17): собственный буфер и окно
--- Neovim без сторонних плагинов. Буфер перерисовывается по каждому уведомлению модели;
--- таймеров нет.
+-- Отображение дерева (спецификация agent-tree, решения D2, D17, D36–D42): собственный буфер
+-- и окно Neovim без сторонних плагинов. Буфер перерисовывается по каждому уведомлению модели.
+--
+-- Значок состояния узла — встроенный виртуальный текст (extmark, `virt_text_pos = "inline"`)
+-- в начале строки узла; кадры значков берутся из `claudr.herdr.icons`. Единственный таймер —
+-- таймер кадров анимации (см. «Таймер кадров» ниже): он меняет только метки значков.
 --
 -- Другие модули добавляют действия над узлом под курсором через `register_action`, файлы
 -- дерева при этом не правятся.
 local model = require("claudr.tree.model")
+local config = require("claudr.config")
 
 local M = {}
 
@@ -13,6 +17,8 @@ M.FILETYPE = "claudr-tree"
 M.WIDTH = 50
 
 local ns = vim.api.nvim_create_namespace("claudr.tree")
+-- метки значков состояний: перерисовываются отдельно от подсветки строк
+local ns_icons = vim.api.nvim_create_namespace("claudr.tree.icons")
 
 local S = {
   buf = nil,
@@ -20,6 +26,14 @@ local S = {
   collapsed = {}, -- идентификатор узла → true, если узел свёрнут
   unsubscribe = nil,
   unsubscribe_pending = nil,
+  unsubscribe_icons = nil,
+  -- значки строк последней перерисовки: `{ row (с 0), col, key, id }`
+  icons = {},
+  -- таблица значков, по которой нарисованы `icons`
+  icon_table = nil,
+  -- таймер кадров или nil
+  timer = nil,
+  augroup = nil,
 }
 
 ---@class claudr.TreeAction
@@ -31,7 +45,7 @@ local S = {
 local actions = {}
 local action_order = {}
 
--- Обозначения видов узлов.
+-- Обозначения видов узлов в режиме `icons = "text"` (и в перечне панелей вида).
 M.ICONS = {
   workspace = "W",
   tab = "T",
@@ -66,6 +80,53 @@ local HL = {
   blocked = "ClaudrTreeBlocked",
   unknown = "ClaudrTreeUnknown",
 }
+
+-- Состояния с собственным значком в таблице значков herdr и группы подсветки значков-символов
+-- (решение D37).
+M.ICON_HL = {
+  idle = "DiagnosticOk",
+  working = "DiagnosticInfo",
+  blocked = "DiagnosticError",
+  done = "DiagnosticHint",
+  unknown = "Comment",
+}
+
+-- Знаки вида узлов без образца в herdr (решение D41): эмодзи без U+FE0F.
+M.KIND_SIGN = {
+  subagent = "🤖",
+  task = "🔧",
+  command = "$",
+}
+
+local function mode()
+  return config.get().icons == "text" and "text" or "herdr"
+end
+
+--- Модуль значков herdr; загружается при первом использовании в отображении.
+local function icons_module()
+  return require("claudr.herdr.icons")
+end
+
+--- Номер кадра (с 0) для времени `now_ms`: целая часть от времени, делённого на период, по
+--- модулю числа кадров (решение D39).
+function M.frame_index(count, period, now_ms)
+  if count <= 1 or not period or period <= 0 then
+    return 0
+  end
+  return math.floor(now_ms / period) % count
+end
+
+local function now_ms()
+  return vim.uv.hrtime() / 1e6
+end
+
+-- Группа подсветки цвета workspace `#RRGGBB`; создаётся при каждой перерисовке, чтобы
+-- пережить смену цветовой схемы.
+local function color_group(color)
+  local name = "ClaudrTreeColor" .. color:sub(2)
+  vim.api.nvim_set_hl(0, name, { fg = color })
+  return name
+end
 
 local function define_highlights()
   local links = {
@@ -159,9 +220,53 @@ local function visible_children(node)
   return out
 end
 
--- Строки буфера, идентификаторы узлов по строкам и подсветка.
+-- Строка узла в режиме `icons = "text"`: буква вида, подпись, состояние словом.
+local function text_line(node, prefix, row, marks)
+  local label = node.kind == "workspace" and node.text_label or node.label
+  local line = prefix .. icon(node) .. " " .. M.one_line(label)
+  local state = M.state_text(node)
+  if state then
+    local start = #line + 1
+    line = line .. " [" .. state .. "]"
+    marks[#marks + 1] = { row, start, #line, HL[node.state] or HL.unknown }
+  end
+  return line
+end
+
+-- Строка узла в режиме `icons = "herdr"`: место значка состояния (метка в `icons`), знак
+-- вида, подпись с цветом workspace, неизвестное значение состояния.
+local function herdr_line(node, prefix, row, marks, icons)
+  local line = prefix
+  if node.icon then
+    local key = M.ICON_HL[node.icon] and node.icon or "unknown"
+    icons[#icons + 1] = { row = row - 1, col = #prefix, key = key }
+  end
+  local sign
+  if node.kind == "pane" then
+    sign = node.pane_kind == "command" and M.KIND_SIGN.command or nil
+  else
+    sign = M.KIND_SIGN[node.kind]
+  end
+  if sign then
+    line = line .. sign .. " "
+  end
+  local start = #line
+  line = line .. M.one_line(node.label)
+  if node.color then
+    marks[#marks + 1] = { row, start, #line, color_group(node.color) }
+  end
+  if node.icon and not M.ICON_HL[node.icon] then
+    local vstart = #line + 1
+    line = line .. " [" .. M.one_line(node.icon) .. "]"
+    marks[#marks + 1] = { row, vstart, #line, HL.unknown }
+  end
+  return line
+end
+
+-- Строки буфера, идентификаторы узлов по строкам, подсветка и места значков состояний.
 local function compose()
-  local lines, ids, marks = {}, {}, {}
+  local lines, ids, marks, icons = {}, {}, {}, {}
+  local text_mode = mode() == "text"
   local st = model.status()
   if st.status ~= "connected" then
     local text = M.STATUS_TEXT[st.status] or ("herdr: " .. tostring(st.status))
@@ -181,27 +286,22 @@ local function compose()
     if #kids > 0 then
       fold = S.collapsed[node.id] and "▸" or "▾"
     end
-    local line = string.rep("  ", depth)
-      .. fold
-      .. " "
-      .. icon(node)
-      .. " "
-      .. M.one_line(node.label)
-    local state = M.state_text(node)
-    if state then
-      local start = #line + 1
-      line = line .. " [" .. state .. "]"
-      local group = HL[node.state] or HL.unknown
-      marks[#marks + 1] = { #lines + 1, start, #line, group }
+    local prefix = string.rep("  ", depth) .. fold .. " "
+    local row = #lines + 1
+    local line
+    if text_mode then
+      line = text_line(node, prefix, row, marks)
+    else
+      line = herdr_line(node, prefix, row, marks, icons)
     end
     local waiting = M.pending_count(node)
     if waiting > 0 then
       local start = #line + 1
       line = line .. " [ждут: " .. waiting .. "]"
-      marks[#marks + 1] = { #lines + 1, start, #line, HL.blocked }
+      marks[#marks + 1] = { row, start, #line, HL.blocked }
     end
-    lines[#lines + 1] = line
-    ids[#lines] = node.id
+    lines[row] = line
+    ids[row] = node.id
     if not S.collapsed[node.id] then
       for _, child in ipairs(kids) do
         walk(child, depth + 1)
@@ -214,7 +314,145 @@ local function compose()
   if #lines == 0 then
     lines[1] = "(нет workspace)"
   end
-  return lines, ids, marks
+  return lines, ids, marks, icons
+end
+
+-- Таймер кадров ---------------------------------------------------------------------------
+--
+-- WARNING: таймер — исключение из правила «без таймеров», разрешённое пользователем
+-- (решение D38): источника событий для смены кадров анимированных значков нет ни в herdr,
+-- ни в Neovim. Таймер заведён, только пока буфер дерева показан в окне текущей вкладки
+-- Neovim и среди показанных узлов есть значок из нескольких кадров; срабатывание меняет только
+-- метки значков (не пишет буфер, не трогает курсор и модель, не читает сокет и файлы).
+-- Условие замены: появление в herdr или Neovim события смены кадра либо отказ от
+-- анимированных значков.
+local function uv_timer()
+  return vim.uv.new_timer()
+end
+local timer_factory = uv_timer
+
+local on_timer
+
+-- Кадры значка по ключу состояния или nil.
+local function frames_of(key)
+  local e = S.icon_table and S.icon_table[key]
+  if type(e) ~= "table" or type(e.frames) ~= "table" or #e.frames == 0 then
+    return nil
+  end
+  return e.frames, tonumber(e.period) or 400
+end
+
+-- Задержка до ближайшей границы кадра среди показанных анимируемых значков или nil, если
+-- таймер заводить не нужно.
+local function next_delay(now)
+  if mode() ~= "herdr" or not model.started() or not buf_valid() then
+    return nil
+  end
+  if #S.icons == 0 or #tree_windows() == 0 then
+    return nil
+  end
+  local best
+  for _, ic in ipairs(S.icons) do
+    local frames, period = frames_of(ic.key)
+    if frames and #frames > 1 and period > 0 then
+      local delay = (math.floor(now / period) + 1) * period - now
+      if not best or delay < best then
+        best = delay
+      end
+    end
+  end
+  if not best then
+    return nil
+  end
+  return math.max(1, math.ceil(best))
+end
+
+local function stop_timer()
+  if S.timer then
+    S.timer:stop()
+    S.timer:close()
+    S.timer = nil
+  end
+end
+
+-- Привести таймер к условиям: завести на ближайшую границу кадра или остановить.
+local function update_timer(now)
+  now = now or now_ms()
+  local delay = next_delay(now)
+  if not delay then
+    stop_timer()
+    return
+  end
+  if not S.timer then
+    S.timer = timer_factory()
+  end
+  S.timer:start(delay, 0, on_timer)
+end
+
+local recheck_pending = false
+
+-- Перепроверка условий таймера после текущего события (одна на несколько событий подряд).
+local function recheck_timer()
+  if recheck_pending then
+    return
+  end
+  recheck_pending = true
+  vim.schedule(function()
+    recheck_pending = false
+    update_timer()
+  end)
+end
+
+-- Метка значка строки с кадром для времени `now`.
+local function draw_icon(ic, now)
+  local frames, period = frames_of(ic.key)
+  if not frames then
+    if ic.id then
+      pcall(vim.api.nvim_buf_del_extmark, S.buf, ns_icons, ic.id)
+      ic.id = nil
+    end
+    return
+  end
+  local frame = frames[M.frame_index(#frames, period, now) + 1]
+  ic.id = vim.api.nvim_buf_set_extmark(S.buf, ns_icons, ic.row, ic.col, {
+    id = ic.id,
+    virt_text = { { tostring(frame), M.ICON_HL[ic.key] }, { " " } },
+    virt_text_pos = "inline",
+    right_gravity = false,
+  })
+end
+
+--- Срабатывание таймера кадров: перепроверка условий и смена кадров анимируемых значков.
+--- `now` — время в миллисекундах (в тестах задаётся явно).
+function M._tick(now)
+  now = now or now_ms()
+  if not next_delay(now) then
+    stop_timer()
+    return
+  end
+  for _, ic in ipairs(S.icons) do
+    local frames = frames_of(ic.key)
+    if frames and #frames > 1 then
+      draw_icon(ic, now)
+    end
+  end
+  update_timer(now)
+end
+
+on_timer = vim.schedule_wrap(function()
+  M._tick()
+end)
+
+--- Только для тестов: подменяет фабрику таймера кадров (`fn() -> таймер` с методами
+--- `start`, `stop`, `close`); без аргумента возвращает настоящую.
+function M._set_timer_factory(fn)
+  stop_timer()
+  timer_factory = fn or uv_timer
+end
+
+--- Только для тестов: заведён ли таймер кадров.
+function M._timer_active()
+  return S.timer ~= nil
 end
 
 local function line_of(id)
@@ -229,9 +467,18 @@ end
 --- узле.
 function M.render()
   if not buf_valid() then
+    update_timer()
     return
   end
-  local lines, ids, marks = compose()
+  local herdr_mode = mode() == "herdr"
+  if herdr_mode and not S.unsubscribe_icons then
+    -- смена значков в конфигурации herdr перерисовывает дерево целиком
+    S.unsubscribe_icons = icons_module().subscribe(function()
+      S.drawn = nil
+      M.render()
+    end)
+  end
+  local lines, ids, marks, icons = compose()
   -- Содержимое не изменилось (например, снимок перечитан по событию вывода панели, а
   -- подписи и состояния те же): буфер не перерисовывается.
   local drawn = S.drawn
@@ -240,11 +487,13 @@ function M.render()
     and drawn.buf == S.buf
     and vim.deep_equal(drawn.lines, lines)
     and vim.deep_equal(drawn.marks, marks)
+    and vim.deep_equal(drawn.icons, icons)
   then
     S.line_ids = ids
+    update_timer()
     return
   end
-  S.drawn = { buf = S.buf, lines = lines, marks = marks }
+  S.drawn = { buf = S.buf, lines = lines, marks = marks, icons = vim.deepcopy(icons) }
   local keep = {}
   for _, win in ipairs(vim.fn.win_findbuf(S.buf)) do
     local row = vim.api.nvim_win_get_cursor(win)[1]
@@ -256,8 +505,15 @@ function M.render()
   vim.bo[S.buf].modified = false
   S.line_ids = ids
   vim.api.nvim_buf_clear_namespace(S.buf, ns, 0, -1)
+  vim.api.nvim_buf_clear_namespace(S.buf, ns_icons, 0, -1)
   for _, m in ipairs(marks) do
     vim.api.nvim_buf_set_extmark(S.buf, ns, m[1] - 1, m[2], { end_col = m[3], hl_group = m[4] })
+  end
+  S.icons = icons
+  S.icon_table = herdr_mode and #icons > 0 and icons_module().get() or nil
+  local now = now_ms()
+  for _, ic in ipairs(icons) do
+    draw_icon(ic, now)
   end
   for win, k in pairs(keep) do
     if vim.api.nvim_win_is_valid(win) then
@@ -265,6 +521,7 @@ function M.render()
       vim.api.nvim_win_set_cursor(win, { math.max(row, 1), 0 })
     end
   end
+  update_timer(now)
 end
 
 --- Узел под курсором в окне дерева (текущем, а если текущее окно не дерево — в первом окне
@@ -414,13 +671,37 @@ local function ensure_buf()
     end)
   end
   local buf = S.buf
+  -- условия таймера кадров перепроверяются при показе, скрытии и закрытии окна дерева и при
+  -- смене вкладки Neovim — после того, как смена закончена: во время события окно новой
+  -- вкладки ещё показывает прежний буфер, а закрываемое окно ещё существует
+  S.augroup = vim.api.nvim_create_augroup("claudr.tree.frames", { clear = true })
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufWinLeave" }, {
+    group = S.augroup,
+    buffer = buf,
+    callback = recheck_timer,
+  })
+  vim.api.nvim_create_autocmd({ "WinClosed", "TabEnter" }, {
+    group = S.augroup,
+    callback = recheck_timer,
+  })
   vim.api.nvim_create_autocmd("BufWipeout", {
+    group = S.augroup,
     buffer = buf,
     once = true,
     callback = function()
       if S.buf == buf then
         S.buf = nil
         S.line_ids = {}
+        S.icons = {}
+        S.icon_table = nil
+        S.drawn = nil
+        stop_timer()
+        if S.unsubscribe_icons then
+          S.unsubscribe_icons()
+          S.unsubscribe_icons = nil
+        end
+        pcall(vim.api.nvim_del_augroup_by_id, S.augroup)
+        S.augroup = nil
         if S.unsubscribe then
           S.unsubscribe()
           S.unsubscribe = nil
@@ -509,6 +790,27 @@ end
 --- Строка буфера, на которой показан узел `id`, или nil.
 function M.line_of(id)
   return line_of(id)
+end
+
+--- Только для тестов: значок строки узла `id` — `{ text, hl, col }` по метке в буфере или nil.
+function M._icon(id)
+  local row = buf_valid() and line_of(id)
+  if not row then
+    return nil
+  end
+  local marks = vim.api.nvim_buf_get_extmarks(
+    S.buf,
+    ns_icons,
+    { row - 1, 0 },
+    { row - 1, -1 },
+    { details = true }
+  )
+  local m = marks[1]
+  if not m then
+    return nil
+  end
+  local vt = m[4].virt_text
+  return { text = vt[1][1], hl = vt[1][2], col = m[3], pos = m[4].virt_text_pos }
 end
 
 return M

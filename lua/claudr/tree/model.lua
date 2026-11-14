@@ -6,12 +6,19 @@
 -- при каждом уведомлении модуля данных; список событий herdr нужен только для `pane_exited`,
 -- которого в снимке нет. Таймеров и опроса нет.
 --
--- Узел: `{ id, kind, pane_kind, label, state, parent, children, data, owner_pane }`:
+-- Узел: `{ id, kind, pane_kind, label, text_label, state, icon, color, parent, children,
+-- data, owner_pane }`:
 --   kind       "workspace" | "tab" | "pane" | "subagent" | "task";
 --   pane_kind  у панели — "agent" | "command", у остальных nil;
---   label      подпись без состояния;
---   state      у панели с агентом — `agent_status` как есть; у субагента и команды —
---              "running" | "finished" | "orphaned"; у workspace — `agent_status`; иначе nil;
+--   label      подпись без состояния; у workspace — «<символ> <label>» по токену `symbol`;
+--   text_label у workspace — `label` без символа (для режима `icons = "text"`), иначе nil;
+--   state      у панели с агентом, вкладки и workspace — `agent_status` как есть; у субагента
+--              и команды — "running" | "finished" | "orphaned"; иначе nil;
+--   icon       состояние значка: "idle" | "working" | "blocked" | "done" | "unknown" или
+--              неизвестное значение `agent_status` как есть; nil — значка состояния нет
+--              (панель с командой, нет `agent_status`). Кадры выбирает отображение;
+--   color      цвет подписи `#RRGGBB` из токена `color` workspace у workspace, его вкладок и
+--              панелей с агентом, иначе nil;
 --   parent     идентификатор родителя или nil; children — идентификаторы детей по порядку;
 --   data       исходная запись (снимка herdr или модуля данных);
 --   owner_pane у субагента и команды — идентификатор панели владельца.
@@ -112,6 +119,43 @@ local function task_label(t)
     end
   end
   return label
+end
+
+-- Значки и цвета ------------------------------------------------------------------------
+
+-- Состояние значка субагента и фоновой команды (решение D41).
+local TASK_ICON = { running = "working", finished = "done", orphaned = "unknown" }
+
+--- Цвет токена `color` в виде `#RRGGBB` или nil, если это не цвет `#RGB`/`#RRGGBB`.
+function M.color(v)
+  if type(v) ~= "string" then
+    return nil
+  end
+  local hex = v:match("^#(%x+)$")
+  if not hex then
+    return nil
+  end
+  if #hex == 3 then
+    hex = hex:gsub(".", "%0%0")
+  elseif #hex ~= 6 then
+    return nil
+  end
+  return "#" .. hex:lower()
+end
+
+local function tokens_of(w)
+  return type(w.tokens) == "table" and w.tokens or {}
+end
+
+--- Подпись workspace: «<символ> <label>»; без символа или при `label`, уже начинающемся с
+--- символа, — `label`.
+local function workspace_label(w)
+  local label = str(w.label) or w.workspace_id
+  local symbol = str(tokens_of(w).symbol)
+  if not symbol or vim.startswith(label, symbol) then
+    return label
+  end
+  return symbol .. " " .. label
 end
 
 -- Слежение за сессиями -----------------------------------------------------------------
@@ -230,6 +274,7 @@ local function add_session(nodes, pane_id, st)
       kind = "subagent",
       label = subagent_label(s),
       state = s.status,
+      icon = TASK_ICON[s.status] or str(s.status),
       data = s,
       owner_pane = pane_id,
       children = {},
@@ -268,6 +313,7 @@ local function add_session(nodes, pane_id, st)
       kind = "task",
       label = task_label(t),
       state = t.status,
+      icon = TASK_ICON[t.status] or str(t.status),
       data = t,
       owner_pane = pane_id,
     }, parent)
@@ -307,8 +353,11 @@ local function build(snap)
       nodes[w.workspace_id] = {
         id = w.workspace_id,
         kind = "workspace",
-        label = str(w.label) or w.workspace_id,
+        label = workspace_label(w),
+        text_label = str(w.label) or w.workspace_id,
         state = str(w.agent_status),
+        icon = str(w.agent_status),
+        color = M.color(tokens_of(w).color),
         data = w,
         children = {},
       }
@@ -323,6 +372,11 @@ local function build(snap)
       end
     end
   end
+  -- цвет подписи по workspace записи
+  local function color_of(ws_id)
+    local w = present(ws_id) and ws_by_id[ws_id]
+    return w and M.color(tokens_of(w).color) or nil
+  end
   for _, t in ipairs(sorted(snap.tabs or {}, "tab_id")) do
     if present(t.tab_id) then
       local parent = nodes[t.workspace_id] and t.workspace_id or nil
@@ -330,6 +384,9 @@ local function build(snap)
         id = t.tab_id,
         kind = "tab",
         label = str(t.label) or t.tab_id,
+        state = str(t.agent_status),
+        icon = str(t.agent_status),
+        color = color_of(t.workspace_id),
         data = t,
       }, parent)
       if not parent then
@@ -349,6 +406,8 @@ local function build(snap)
         pane_kind = kind,
         label = pane_label(p),
         state = kind == "agent" and str(p.agent_status) or nil,
+        icon = kind == "agent" and str(p.agent_status) or nil,
+        color = kind == "agent" and color_of(p.workspace_id) or nil,
         data = p,
       }, parent)
       if not parent then
@@ -534,11 +593,6 @@ end
 -- Только для тестов: слежение за сессиями по панелям.
 function M._sessions()
   return S.sessions
-end
-
--- Только для тестов: панели с полученным `pane_exited`.
-function M._exited()
-  return S.exited
 end
 
 -- Только для тестов: панели с полученным `pane_exited`.
