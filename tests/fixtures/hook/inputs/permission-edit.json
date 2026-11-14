@@ -1,0 +1,22 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000031",
+ "transcript_path": "@CLAUDE@/projects/-srv-demo-alpha/00000000-0000-4000-8000-000000000031.jsonl",
+ "cwd": "@CWD@",
+ "prompt_id": "00000000-0000-4000-8000-000000000041",
+ "permission_mode": "default",
+ "hook_event_name": "PermissionRequest",
+ "tool_name": "Edit",
+ "tool_input": {
+  "file_path": "@CWD@/notes.txt",
+  "old_string": "old",
+  "new_string": "new text",
+  "replace_all": false
+ },
+ "permission_suggestions": [
+  {
+   "type": "setMode",
+   "mode": "acceptEdits",
+   "destination": "session"
+  }
+ ]
+}

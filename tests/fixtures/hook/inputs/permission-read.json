@@ -1,0 +1,25 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000031",
+ "transcript_path": "@CLAUDE@/projects/-srv-demo-alpha/00000000-0000-4000-8000-000000000031.jsonl",
+ "cwd": "@CWD@",
+ "prompt_id": "00000000-0000-4000-8000-000000000041",
+ "permission_mode": "default",
+ "hook_event_name": "PermissionRequest",
+ "tool_name": "Read",
+ "tool_input": {
+  "file_path": "/etc/hostname"
+ },
+ "permission_suggestions": [
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "Read",
+     "ruleContent": "//etc/**"
+    }
+   ],
+   "behavior": "allow",
+   "destination": "session"
+  }
+ ]
+}

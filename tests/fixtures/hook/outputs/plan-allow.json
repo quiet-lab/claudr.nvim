@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"plan":"# Plan: create plan-out.txt\n\n## Steps\n1. Check that `plan-out.txt` does not exist.\n2. Create it with the Write tool, content `x`.\n\n## Verification\nReading `plan-out.txt` returns `x`.\n","planFilePath":"@CLAUDE@/plans/sample-plan.md"}}}}
