@@ -108,13 +108,109 @@ local function icons_module()
 end
 
 --- Номер кадра (с 0) для времени `now_ms`: целая часть от времени, делённого на период, по
---- модулю числа кадров (решение D39).
+--- модулю числа кадров (общие кадры, `frame_phase = "synced"`).
 function M.frame_index(count, period, now_ms)
   if count <= 1 or not period or period <= 0 then
     return 0
   end
   return math.floor(now_ms / period) % count
 end
+
+-- Начальное значение строки, как `row_phase` herdr (`status_frames.rs`): FNV-1a 64 по
+-- пустому ключу машины, байту 0xff и идентификатору строки, затем перемешивание splitmix64.
+-- Возвращает старшие 32 бита (разброс скорости) и функцию остатка от деления значения
+-- (сдвиг начала). Без LuaJIT FFI — 32-битное значение того же назначения.
+local has_ffi, ffi = pcall(require, "ffi")
+local seeds = {}
+local seed_count = 0
+
+local function seed_ffi(id)
+  local U = function(hi, lo)
+    return ffi.cast("uint64_t", hi) * 0x100000000 + lo
+  end
+  local h = U(0xcbf29ce4, 0x84222325)
+  local prime = U(0x00000100, 0x000001b3)
+  local function mix(byte)
+    h = bit.bxor(h, ffi.cast("uint64_t", byte)) * prime
+  end
+  mix(0xff)
+  for i = 1, #id do
+    mix(id:byte(i))
+  end
+  h = bit.bxor(h, bit.rshift(h, 30)) * U(0xbf58476d, 0x1ce4e5b9)
+  h = bit.bxor(h, bit.rshift(h, 27)) * U(0x94d049bb, 0x133111eb)
+  h = bit.bxor(h, bit.rshift(h, 31))
+  local value = h
+  return tonumber(bit.rshift(value, 32)), function(m)
+    return tonumber(value % m)
+  end
+end
+
+local function seed_plain(id)
+  local h = 2166136261
+  for i = 1, #id do
+    h = (h * 31 + id:byte(i)) % 4294967296
+  end
+  local value = (h * 2654435761) % 4294967296
+  return h, function(m)
+    return value % m
+  end
+end
+
+local function row_seed(id)
+  local e = seeds[id]
+  if not e then
+    if seed_count >= 4096 then
+      seeds, seed_count = {}, 0
+    end
+    local hi, rem
+    if has_ffi then
+      hi, rem = seed_ffi(id)
+    else
+      hi, rem = seed_plain(id)
+    end
+    e = { hi = hi, rem = rem }
+    seeds[id] = e
+    seed_count = seed_count + 1
+  end
+  return e
+end
+
+--- Часы строки, как `RowClock` herdr: период кадра и сдвиг начала в микросекундах. Без
+--- `per_row` — период состояния и нулевой сдвиг (кадры общие); с `per_row` период умножается
+--- на коэффициент строки от `1 - spread` до `1 + spread`, а сдвиг равномерен в пределах
+--- полного круга кадров; оба выводятся из идентификатора строки `id`.
+function M.row_clock(entry, id)
+  local period_us = math.max(1, math.floor((tonumber(entry.period) or 400) * 1000))
+  if not entry.per_row or id == nil then
+    return period_us, 0
+  end
+  local seed = row_seed(tostring(id))
+  local spread = math.max(0, math.min(500, tonumber(entry.spread) or 0))
+  local speed = 1000 - spread + seed.hi % (2 * spread + 1)
+  period_us = math.max(1, math.floor(period_us * speed / 1000))
+  local frames = math.max(1, #entry.frames)
+  return period_us, seed.rem(period_us * frames)
+end
+
+--- Номер кадра (с 0) строки `id` в момент `now_ms` по часам `M.row_clock`.
+function M.row_frame_index(entry, id, now_ms)
+  local count = #entry.frames
+  if count <= 1 then
+    return 0
+  end
+  local period_us, offset_us = M.row_clock(entry, id)
+  return math.floor((math.floor(now_ms * 1000) + offset_us) / period_us) % count
+end
+
+-- Ближайшая граница кадра строки строго после `now_us`, в микросекундах.
+local function row_boundary(entry, id, now_us)
+  local period_us, offset_us = M.row_clock(entry, id)
+  return (math.floor((now_us + offset_us) / period_us) + 1) * period_us - offset_us
+end
+
+-- Границы разных строк ближе этого окна обслуживаются одним срабатыванием (как в herdr).
+local MERGE_WINDOW_US = 2000
 
 local function now_ms()
   return vim.uv.hrtime() / 1e6
@@ -220,6 +316,35 @@ local function visible_children(node)
   return out
 end
 
+--- Дети узла, как они показаны в дереве: в режиме `icons = "herdr"` единственная вкладка
+--- workspace отдельной строкой не показывается, её панели стоят прямо под workspace — у
+--- herdr вкладка без пары повторяет свой workspace и подписи не получает (`labels.rs`,
+--- `tab_token_shown`). Режим `icons = "text"` показывает все уровни, как раньше (D42).
+function M.shown_children(node)
+  local kids = visible_children(node)
+  if node.kind ~= "workspace" or mode() ~= "herdr" then
+    return kids
+  end
+  local tabs = 0
+  for _, c in ipairs(kids) do
+    if c.kind == "tab" then
+      tabs = tabs + 1
+    end
+  end
+  if tabs ~= 1 then
+    return kids
+  end
+  local out = {}
+  for _, c in ipairs(kids) do
+    if c.kind == "tab" then
+      vim.list_extend(out, visible_children(c))
+    else
+      out[#out + 1] = c
+    end
+  end
+  return out
+end
+
 -- Строка узла в режиме `icons = "text"`: буква вида, подпись, состояние словом.
 local function text_line(node, prefix, row, marks)
   local label = node.kind == "workspace" and node.text_label or node.label
@@ -239,7 +364,7 @@ local function herdr_line(node, prefix, row, marks, icons)
   local line = prefix
   if node.icon then
     local key = M.ICON_HL[node.icon] and node.icon or "unknown"
-    icons[#icons + 1] = { row = row - 1, col = #prefix, key = key }
+    icons[#icons + 1] = { row = row - 1, col = #prefix, key = key, node = node.id }
   end
   local sign
   if node.kind == "pane" then
@@ -281,7 +406,7 @@ local function compose()
     if not model.visible(node) then
       return
     end
-    local kids = visible_children(node)
+    local kids = M.shown_children(node)
     local fold = " "
     if #kids > 0 then
       fold = S.collapsed[node.id] and "▸" or "▾"
@@ -333,17 +458,18 @@ local timer_factory = uv_timer
 
 local on_timer
 
--- Кадры значка по ключу состояния или nil.
-local function frames_of(key)
+-- Запись таблицы значков по ключу состояния (кадры, период, фаза) или nil.
+local function entry_of(key)
   local e = S.icon_table and S.icon_table[key]
   if type(e) ~= "table" or type(e.frames) ~= "table" or #e.frames == 0 then
     return nil
   end
-  return e.frames, tonumber(e.period) or 400
+  return e
 end
 
--- Задержка до ближайшей границы кадра среди показанных анимируемых значков или nil, если
--- таймер заводить не нужно.
+-- Задержка в миллисекундах до ближайшей границы кадра среди показанных анимируемых значков
+-- (границы в пределах 2 мс от ближайшей обслуживаются вместе) или nil, если таймер заводить
+-- не нужно.
 local function next_delay(now)
   if mode() ~= "herdr" or not model.started() or not buf_valid() then
     return nil
@@ -351,20 +477,29 @@ local function next_delay(now)
   if #S.icons == 0 or #tree_windows() == 0 then
     return nil
   end
-  local best
+  local now_us = math.floor(now * 1000)
+  local bounds = {}
+  local first
   for _, ic in ipairs(S.icons) do
-    local frames, period = frames_of(ic.key)
-    if frames and #frames > 1 and period > 0 then
-      local delay = (math.floor(now / period) + 1) * period - now
-      if not best or delay < best then
-        best = delay
+    local e = entry_of(ic.key)
+    if e and #e.frames > 1 then
+      local b = row_boundary(e, ic.node, now_us)
+      bounds[#bounds + 1] = b
+      if not first or b < first then
+        first = b
       end
     end
   end
-  if not best then
+  if not first then
     return nil
   end
-  return math.max(1, math.ceil(best))
+  local target = first
+  for _, b in ipairs(bounds) do
+    if b > target and b <= first + MERGE_WINDOW_US then
+      target = b
+    end
+  end
+  return math.max(1, math.ceil((target - now_us) / 1000))
 end
 
 local function stop_timer()
@@ -403,20 +538,24 @@ local function recheck_timer()
   end)
 end
 
--- Метка значка строки с кадром для времени `now`.
+-- Метка значка строки с кадром для времени `now`; метка с тем же кадром не переставляется.
 local function draw_icon(ic, now)
-  local frames, period = frames_of(ic.key)
-  if not frames then
+  local e = entry_of(ic.key)
+  if not e then
     if ic.id then
       pcall(vim.api.nvim_buf_del_extmark, S.buf, ns_icons, ic.id)
       ic.id = nil
     end
     return
   end
-  local frame = frames[M.frame_index(#frames, period, now) + 1]
+  local frame = tostring(e.frames[M.row_frame_index(e, ic.node, now) + 1])
+  if ic.id and ic.frame == frame then
+    return
+  end
+  ic.frame = frame
   ic.id = vim.api.nvim_buf_set_extmark(S.buf, ns_icons, ic.row, ic.col, {
     id = ic.id,
-    virt_text = { { tostring(frame), M.ICON_HL[ic.key] }, { " " } },
+    virt_text = { { frame, M.ICON_HL[ic.key] }, { " " } },
     virt_text_pos = "inline",
     right_gravity = false,
   })
@@ -431,8 +570,8 @@ function M._tick(now)
     return
   end
   for _, ic in ipairs(S.icons) do
-    local frames = frames_of(ic.key)
-    if frames and #frames > 1 then
+    local e = entry_of(ic.key)
+    if e and #e.frames > 1 then
       draw_icon(ic, now)
     end
   end
@@ -766,6 +905,10 @@ function M.focus(id)
   end
   M.render()
   local line = line_of(id)
+  if not line and node.kind == "tab" and node.parent then
+    -- единственная вкладка своей строки не имеет: курсор встаёт на её workspace
+    line = line_of(node.parent)
+  end
   local win = tree_window()
   if not line or not win then
     return false

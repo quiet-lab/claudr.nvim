@@ -88,9 +88,10 @@ describe("Значки узлов", function()
     t.eq(ic.text, "i")
     t.eq(ic.hl, "DiagnosticOk")
     t.eq(ic.pos, "inline")
-    -- панель без детей: отступ, место знака свёртки и пробел
-    t.eq(ic.col, #"      ", "значок в начале строки узла")
-    t.eq(line("w1:p1"), "      opus задача w1:p1")
+    -- панель без детей под workspace (единственная вкладка схлопнута): отступ, место знака
+    -- свёртки и пробел
+    t.eq(ic.col, #"    ", "значок в начале строки узла")
+    t.eq(line("w1:p1"), "    opus задача w1:p1")
     t.eq(
       line("w1:p1"):find(" A ", 1, true),
       nil,
@@ -139,17 +140,21 @@ describe("Значки узлов", function()
       view.open()
       wait_line("w1:p1")
       t.eq(view._icon("w1:p1"), nil)
-      t.eq(line("w1:p1"), "      $ cargo /src")
+      t.eq(line("w1:p1"), "    $ cargo /src")
     end
   )
 
   it("Состояния нет", function()
     local tab = double.tab({ tab_id = "w1:t1", label = "main" })
     tab.agent_status = nil
+    -- вторая вкладка: единственная вкладка строки не имеет
     s.env({
       workspaces = { ws({ workspace_id = "w1", label = "ws1" }) },
-      tabs = { tab },
-      panes = { double.pane({ pane_id = "w1:p1" }) },
+      tabs = { tab, double.tab({ tab_id = "w1:t2" }) },
+      panes = {
+        double.pane({ pane_id = "w1:p1", agent = "codex" }),
+        double.pane({ pane_id = "w1:p2", tab_id = "w1:t2" }),
+      },
     })
     view.open()
     wait_line("w1:t1")
@@ -160,8 +165,14 @@ describe("Значки узлов", function()
   it("состояние вкладки — из снимка", function()
     s.env({
       workspaces = { ws({ workspace_id = "w1" }) },
-      tabs = { double.tab({ tab_id = "w1:t1", agent_status = "blocked" }) },
-      panes = { double.pane({ pane_id = "w1:p1" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", agent_status = "blocked" }),
+        double.tab({ tab_id = "w1:t2" }),
+      },
+      panes = {
+        double.pane({ pane_id = "w1:p1" }),
+        double.pane({ pane_id = "w1:p2", tab_id = "w1:t2" }),
+      },
     })
     t.eq(s.wait_node("w1:t1").state, "blocked")
     t.eq(model.get("w1:t1").icon, "blocked")
@@ -196,13 +207,79 @@ describe("Подписи workspace и вкладок", function()
     view.open()
     wait_line("w1:p2")
     t.match(line("w1"), "^▾ S1 demo$")
-    for _, id in ipairs({ "w1", "w1:t1", "w1:p1" }) do
+    -- единственная вкладка своей строки не имеет: окраска проверена по модели
+    for _, id in ipairs({ "w1", "w1:p1" }) do
       local col = #line(id):match("^[%s▾▸]* ")
       local group = hl_at(id, col)
       t.ok(group, "подпись окрашена: " .. id)
       t.eq(hl_fg(group), "#336699")
     end
   end)
+
+  it("Подпись вкладки по правилу herdr", function()
+    s.env({
+      workspaces = { ws({ workspace_id = "w1", label = "demo", tokens = { symbol = "S1" } }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1" }),
+        double.tab({ tab_id = "w1:t2", label = "▸ notes" }),
+        double.tab({ tab_id = "w1:t3", label = "demo" }),
+        double.tab({ tab_id = "w1:t4", label = "review" }),
+      },
+      panes = {
+        double.pane({ pane_id = "w1:p1", agent = "codex", cwd = "/nonexistent-claudr/proj" }),
+        double.pane({
+          pane_id = "w1:p2",
+          tab_id = "w1:t2",
+          foreground_process = "bash",
+          cwd = "/nonexistent-claudr/notes",
+        }),
+        double.pane({
+          pane_id = "w1:p3",
+          tab_id = "w1:t3",
+          agent = "codex",
+          cwd = "/nonexistent-claudr/a",
+        }),
+        double.pane({
+          pane_id = "w1:p4",
+          tab_id = "w1:t4",
+          agent = "codex",
+          cwd = "/nonexistent-claudr/b",
+        }),
+      },
+    })
+    s.wait_node("w1:t4")
+    local agent = model.get("w1:p1").data.display_agent or "codex"
+    t.eq(
+      model.get("w1:t1").label,
+      "S1 proj · " .. agent,
+      "номер вместо имени — автоматическая подпись"
+    )
+    t.eq(
+      model.get("w1:t2").label,
+      "S1 notes · bash",
+      "ручное имя без агента не показывается"
+    )
+    t.eq(
+      model.get("w1:t3").label,
+      "S1 a · " .. agent,
+      "имя, повторяющее workspace, не показывается"
+    )
+    t.eq(model.get("w1:t4").label, "review", "ручное имя при агенте")
+    view.open()
+    wait_line("w1:t4")
+    t.match(line("w1:t2"), "S1 notes · bash$")
+  end)
+
+  it(
+    "автоматическая подпись: недостающие части опускаются",
+    function()
+      t.eq(model.auto_label("S1", "proj", "nvim"), "S1 proj · nvim")
+      t.eq(model.auto_label(nil, "proj", "nvim"), "proj · nvim")
+      t.eq(model.auto_label("S1", "proj", nil), "S1 proj")
+      t.eq(model.auto_label(nil, nil, "nvim"), "nvim")
+      t.eq(model.auto_label("S1", nil, nil), nil)
+    end
+  )
 
   it("символ уже в начале label не повторяется", function()
     s.env({

@@ -97,10 +97,33 @@ local function pane_label(p)
   return join({ str(p.foreground_process), str(p.cwd) or str(p.foreground_cwd) })
 end
 
+-- Длина подписи субагента по первой строке задания, в символах.
+M.PROMPT_LABEL_MAX = 60
+
+-- Первая строка задания субагента, укороченная до `PROMPT_LABEL_MAX` символов.
+local function prompt_label(s)
+  local p = str(s.prompt)
+  if not p then
+    return nil
+  end
+  if vim.fn.strchars(p) > M.PROMPT_LABEL_MAX then
+    p = vim.fn.strcharpart(p, 0, M.PROMPT_LABEL_MAX - 1) .. "…"
+  end
+  return p
+end
+
+--- Подпись субагента: описание вызова (или первая строка задания) и тип агента в скобках;
+--- без описания и задания — тип агента; без всего — идентификатор.
 local function subagent_label(s)
-  local label = join({ str(s.description), present(s.agent_type) and ("(" .. s.agent_type .. ")") })
-  if label == "" then
-    label = s.id
+  local caption = str(s.description) or prompt_label(s)
+  local label
+  if caption then
+    label = caption
+    if present(s.agent_type) then
+      label = label .. " (" .. s.agent_type .. ")"
+    end
+  else
+    label = str(s.agent_type) or s.id
   end
   if s.status == "finished" and s.stop == "killed" then
     label = label .. ", остановлен"
@@ -147,9 +170,95 @@ local function tokens_of(w)
   return type(w.tokens) == "table" and w.tokens or {}
 end
 
+local workspace_label
+
+-- Место панели для автоматической подписи herdr: имя репозитория Git, в котором лежит её
+-- каталог, иначе имя самого каталога (как `place` herdr: никогда не путь). Ответ
+-- запоминается по каталогу до остановки модели.
+local places = {}
+
+local function place_of(cwd)
+  if not cwd then
+    return nil
+  end
+  local known = places[cwd]
+  if known ~= nil then
+    return known or nil
+  end
+  local dir = vim.fs.normalize(cwd)
+  local found = vim.fs.find(".git", { upward = true, path = dir, limit = 1 })[1]
+  local root = found and vim.fs.dirname(found) or dir
+  local name = vim.fs.basename(root)
+  if name == "" then
+    name = root
+  end
+  places[cwd] = name ~= "" and name or false
+  return places[cwd] or nil
+end
+
+--- Автоматическая подпись herdr «<символ> <место> · <приложение>» (`auto_label.rs`):
+--- недостающие части опускаются вместе с разделителем; nil — нет ни места, ни приложения.
+function M.auto_label(symbol, place, app)
+  if not present(place) and not present(app) then
+    return nil
+  end
+  local head = present(symbol) and present(place) and (symbol .. " " .. place)
+    or (present(symbol) and symbol or present(place) and place or "")
+  if not present(app) then
+    return head
+  end
+  if head == "" then
+    return app
+  end
+  return head .. " · " .. app
+end
+
+-- Подпись агента панели для автоматической подписи вкладки.
+local function agent_name(p)
+  return str(p.display_agent) or str(p.agent)
+end
+
+--- Подпись вкладки по правилу herdr (`labels.rs`, `auto_label.rs`): ручное имя — только
+--- пока во вкладке есть агент и имя не повторяет подпись workspace; иначе автоматическая
+--- подпись «<символ workspace> <место> · <приложение>»: место — по каталогу первой панели,
+--- приложение — агент панели в фокусе или любой другой, без агента — процесс панели в
+--- фокусе. Ручным считается имя, отличное от номера вкладки: признака ручного имени снимок
+--- не отдаёт. Без фактов для автоматической подписи — `label` как есть.
+local function tab_label(t, w, panes)
+  local label = str(t.label) or t.tab_id
+  local manual = label ~= tostring(t.number)
+  local focused = panes[1]
+  for _, p in ipairs(panes) do
+    if p.focused == true then
+      focused = p
+      break
+    end
+  end
+  local agent = focused and agent_name(focused)
+  if not agent then
+    for _, p in ipairs(panes) do
+      agent = agent_name(p)
+      if agent then
+        break
+      end
+    end
+  end
+  local repeats = false
+  if w then
+    repeats = label == str(w.label) or label == workspace_label(w)
+  end
+  if manual and agent and not repeats then
+    return label
+  end
+  local first = panes[1]
+  local place = first and place_of(str(first.cwd) or str(first.foreground_cwd))
+  local app = agent or (focused and str(focused.foreground_process))
+  return M.auto_label(w and str(tokens_of(w).symbol), place, app) or label
+end
+
 --- Подпись workspace: «<символ> <label>»; без символа или при `label`, уже начинающемся с
 --- символа, — `label`.
-local function workspace_label(w)
+workspace_label = function(w)
   local label = str(w.label) or w.workspace_id
   local symbol = str(tokens_of(w).symbol)
   if not symbol or vim.startswith(label, symbol) then
@@ -377,13 +486,21 @@ local function build(snap)
     local w = present(ws_id) and ws_by_id[ws_id]
     return w and M.color(tokens_of(w).color) or nil
   end
+  local panes = sorted(snap.panes or {}, "pane_id")
+  local panes_of_tab = {}
+  for _, p in ipairs(panes) do
+    if present(p.tab_id) then
+      panes_of_tab[p.tab_id] = panes_of_tab[p.tab_id] or {}
+      table.insert(panes_of_tab[p.tab_id], p)
+    end
+  end
   for _, t in ipairs(sorted(snap.tabs or {}, "tab_id")) do
     if present(t.tab_id) then
       local parent = nodes[t.workspace_id] and t.workspace_id or nil
       add(nodes, {
         id = t.tab_id,
         kind = "tab",
-        label = str(t.label) or t.tab_id,
+        label = tab_label(t, ws_by_id[t.workspace_id], panes_of_tab[t.tab_id] or {}),
         state = str(t.agent_status),
         icon = str(t.agent_status),
         color = color_of(t.workspace_id),
@@ -394,7 +511,7 @@ local function build(snap)
       end
     end
   end
-  for _, p in ipairs(sorted(snap.panes or {}, "pane_id")) do
+  for _, p in ipairs(panes) do
     if present(p.pane_id) then
       local parent = (nodes[p.tab_id] and nodes[p.tab_id].kind == "tab" and p.tab_id)
         or (nodes[p.workspace_id] and p.workspace_id)
@@ -477,6 +594,7 @@ function M.stop()
   end
   S.syncing = false
   S.exited = {}
+  places = {}
   S.status = { status = "stopped" }
   S.nodes, S.roots = {}, {}
   notify()
@@ -589,6 +707,9 @@ function M.visible(node)
   end
   return true
 end
+
+-- Только для тестов: подпись субагента по записи модуля данных.
+M._subagent_label = subagent_label
 
 -- Только для тестов: слежение за сессиями по панелям.
 function M._sessions()

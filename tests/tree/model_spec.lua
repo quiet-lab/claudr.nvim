@@ -574,3 +574,30 @@ describe("Обновление по событиям", function()
     end
   )
 end)
+
+describe("Подпись субагента", function()
+  it(
+    "описание, первая строка задания, тип агента, идентификатор",
+    function()
+      local f = model._subagent_label
+      t.eq(
+        f({ id = "a1", description = "поиск", agent_type = "Explore" }),
+        "поиск (Explore)"
+      )
+      t.eq(
+        f({ id = "a1", prompt = "Проверить ветку", agent_type = "general-purpose" }),
+        "Проверить ветку (general-purpose)"
+      )
+      t.eq(f({ id = "a1", agent_type = "general-purpose" }), "general-purpose")
+      t.eq(f({ id = "a1" }), "a1")
+      t.eq(
+        f({ id = "a1", description = "поиск" }),
+        "поиск",
+        "без типа — без скобок"
+      )
+      local long = f({ id = "a1", prompt = string.rep("я", 100) })
+      t.eq(vim.fn.strchars(long), model.PROMPT_LABEL_MAX)
+      t.match(long, "…$")
+    end
+  )
+end)

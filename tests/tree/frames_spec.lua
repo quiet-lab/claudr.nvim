@@ -313,6 +313,86 @@ describe("Кадр анимации", function()
   end)
 end)
 
+describe("Кадры строк со сдвигом (per_row)", function()
+  -- Образец herdr: 8 кадров, 83 мс, разброс 0.10.
+  local MOON = { "m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7" }
+  local function per_row_icons(spread)
+    local tbl = vim.deepcopy(s.ICONS)
+    tbl.working = { frames = MOON, period = 83, per_row = true, spread = spread }
+    return tbl
+  end
+
+  it("часы строки совпадают с row_phase herdr", function()
+    local e = per_row_icons(100).working
+    -- значения посчитаны по status_frames.rs (FNV-1a 64 и splitmix64, ключ машины пустой)
+    local period, offset = view.row_clock(e, "w1:p1")
+    t.eq(period, 86735)
+    t.eq(offset, 510167)
+    period, offset = view.row_clock(e, "w1:p2")
+    t.eq(period, 90470)
+    t.eq(offset, 331971)
+  end)
+
+  it("разброс и сдвиг в пределах", function()
+    local e = per_row_icons(100).working
+    for i = 1, 200 do
+      local period, offset = view.row_clock(e, "w" .. i .. ":p1")
+      t.ok(period >= 83 * 900 and period <= 83 * 1100, "период " .. period)
+      t.ok(offset >= 0 and offset < period * #MOON, "сдвиг " .. offset)
+    end
+    local period = view.row_clock(per_row_icons(0).working, "w1:p1")
+    t.eq(period, 83000, "без разброса — период состояния")
+    t.eq(
+      { view.row_clock(s.ICONS.working, "w1:p1") },
+      { 100000, 0 },
+      "synced — без сдвига"
+    )
+  end)
+
+  it("разные строки показывают разные кадры", function()
+    icons.set(per_row_icons(100))
+    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
+    view.open()
+    wait_line("w1:p2")
+    local base = 1000000
+    view._tick(base)
+    local a, b = view._icon("w1:p1").text, view._icon("w1:p2").text
+    t.eq(a, MOON[view.row_frame_index(icons.table.working, "w1:p1", base) + 1])
+    t.eq(b, MOON[view.row_frame_index(icons.table.working, "w1:p2", base) + 1])
+    local differ = 0
+    for i = 0, 40 do
+      local now = base + i * 50
+      view._tick(now)
+      if view._icon("w1:p1").text ~= view._icon("w1:p2").text then
+        differ = differ + 1
+      end
+    end
+    t.ok(differ > 0, "кадры строк не совпадают всё время")
+  end)
+
+  it("таймер — на ближайшую границу среди строк", function()
+    icons.set(per_row_icons(100))
+    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
+    view.open()
+    wait_line("w1:p2")
+    local now = 1000000
+    view._tick(now)
+    local best
+    for _, id in ipairs({ "w1:p1", "w1:p2" }) do
+      local period, offset = view.row_clock(icons.table.working, id)
+      local us = now * 1000
+      local b = (math.floor((us + offset) / period) + 1) * period - offset
+      best = (not best or b < best) and b or best
+    end
+    local delay = rec.active().delay
+    t.ok(
+      delay >= math.ceil((best - now * 1000) / 1000)
+        and delay <= math.ceil((best + 2000 - now * 1000) / 1000),
+      "задержка " .. delay
+    )
+  end)
+end)
+
 describe("Обновление по событиям", function()
   it("Таймер кадров не читает данные", function()
     local d = s.env(

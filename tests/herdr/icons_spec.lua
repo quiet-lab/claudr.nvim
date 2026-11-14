@@ -72,10 +72,30 @@ describe("Значки состояний из конфигурации herdr", 
     t.eq(frames("working"), { "a", "b" })
   end)
 
-  it("Посторонние ключи", function()
+  it("Разброс вне диапазона", function()
     install("extra-keys.toml")
-    t.eq(icons.get().working, { frames = { "a", "b" }, period = 400 })
+    t.eq(
+      icons.get().working,
+      { frames = { "a", "b" }, period = 400, per_row = true, spread = 0 },
+      "разброс 20 вне 0…0.5 — без разброса"
+    )
     t.ok(icons.parse(fixture("extra-keys.toml")) ~= nil, "файл разобран")
+  end)
+
+  it("Фаза и разброс", function()
+    local function get(text)
+      return icons.resolve(icons.parse("[ui.status_icons]\n" .. text))
+    end
+    local got = get('frame_phase = "per_row"\nframe_speed_spread = { working = 0.10 }\n')
+    t.eq(got.working.per_row, true)
+    t.eq(got.working.spread, 100)
+    t.eq(got.blocked.spread, 0, "состояние без разброса")
+    got = get('frame_phase = "per_row"\nframe_speed_spread = 0.25\n')
+    t.eq(got.idle.spread, 250, "число — для всех состояний")
+    got = get('frame_phase = "synced"\nframe_speed_spread = 0.25\n')
+    t.eq(got.working.per_row, nil, "synced — кадры общие")
+    t.eq(got.working.spread, nil)
+    t.eq(get('idle = "x"\n').working.per_row, nil, "по умолчанию synced")
   end)
 
   it(

@@ -45,6 +45,46 @@ describe("Субагенты сессии", function()
     h:close()
   end)
 
+  it("Подпись субагента без описания", function()
+    local dir = u.fresh("subagent-command")
+    local sub = fixtures.session_dir("subagent-command", dir) .. "/subagents"
+    local function write(name, text)
+      local f = assert(io.open(sub .. "/" .. name, "w"))
+      f:write(text)
+      f:close()
+    end
+    -- без description и toolUseId: первая непустая строка задания из транскрипта
+    write("agent-a0000000000000078.meta.json", '{"agentType":"general-purpose","spawnDepth":1}')
+    write("agent-a0000000000000078.jsonl", vim.json.encode({
+      type = "user",
+      agentId = "a0000000000000078",
+      message = {
+        role = "user",
+        content = "\n  Проверить ветку   \nподробности",
+      },
+    }) .. "\n")
+    -- без description, но с toolUseId вызова Agent: описание из вызова
+    write(
+      "agent-a0000000000000079.meta.json",
+      '{"agentType":"general-purpose","spawnDepth":1,"toolUseId":"toolu_01Fixture000000000000011"}'
+    )
+    write(
+      "agent-a0000000000000079.jsonl",
+      vim.json.encode({ type = "assistant", message = { role = "assistant", content = {} } })
+        .. "\n"
+    )
+    local h = u.watch_session(fixtures.session_id("subagent-command"), function() end)
+    local s = h:state()
+    t.eq(s.subagents.a0000000000000078.description, nil)
+    t.eq(s.subagents.a0000000000000078.prompt, "Проверить ветку")
+    t.eq(
+      s.subagents.a0000000000000079.description,
+      "Проверка фонового Bash с кодом выхода"
+    )
+    t.eq(s.subagents.a0000000000000079.prompt, nil, "первая запись не задание")
+    h:close()
+  end)
+
   it("Посторонний файл", function()
     local s, h = session_state({ "subagent-command", "subagent-extra-files" }, "subagent-command")
     local sub = fixtures.session_dir("subagent-command") .. "/subagents"

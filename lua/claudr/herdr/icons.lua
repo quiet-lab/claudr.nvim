@@ -304,7 +304,7 @@ function P:header()
   return "skip"
 end
 
-local ICON_KEYS = { frame_interval_ms = true }
+local ICON_KEYS = { frame_interval_ms = true, frame_phase = true, frame_speed_spread = true }
 for _, s in ipairs(STATES) do
   ICON_KEYS[s] = true
 end
@@ -386,6 +386,14 @@ local function frames_of(v)
   end
 end
 
+-- Разброс периода строки в тысячных (`frame_speed_spread`, число от 0 до 0.5); иначе 0.
+local function spread_of(v)
+  if type(v) == "number" and v >= 0 and v <= 0.5 then
+    return math.floor(v * 1000 + 0.5)
+  end
+  return 0
+end
+
 local function period_of(v)
   if type(v) == "number" and v % 1 == 0 and v >= MIN_PERIOD and v <= MAX_PERIOD then
     return v
@@ -394,11 +402,16 @@ local function period_of(v)
 end
 
 --- Значки пяти состояний по разобранной конфигурации (`nil` — только встроенные):
---- `{ idle = { frames = {…}, period = мс }, … }`.
+--- `{ idle = { frames = {…}, period = мс }, … }`. При `frame_phase = "per_row"` у каждого
+--- состояния ещё `per_row = true` и `spread` — разброс периода строки в тысячных
+--- (`frame_speed_spread`: число для всех состояний или встроенная таблица по состояниям,
+--- от 0 до 0.5); без него кадры всех строк общие (`synced`, как в herdr по умолчанию).
 function M.resolve(parsed)
   local style = BUILTIN[parsed and parsed.status_indicators or "dots"] or BUILTIN.dots
   local icons = parsed and parsed.status_icons or {}
   local interval = icons.frame_interval_ms
+  local per_row = icons.frame_phase == "per_row"
+  local spread = icons.frame_speed_spread
   local out = {}
   for _, state in ipairs(STATES) do
     local p = interval
@@ -409,6 +422,10 @@ function M.resolve(parsed)
       frames = frames_of(icons[state]) or { style[state] },
       period = period_of(p),
     }
+    if per_row then
+      out[state].per_row = true
+      out[state].spread = spread_of(type(spread) == "table" and spread[state] or spread)
+    end
   end
   return out
 end

@@ -48,15 +48,15 @@ describe("Открытие дерева", function()
     t.eq(vim.bo[buf].filetype, "claudr-tree")
     wait_line("🔧 Wait for background sleep command output")
     local lines = view.lines()
+    -- единственная вкладка схлопнута: панели прямо под workspace
     t.eq(lines[1], "▾ S ws1")
-    t.eq(lines[2], "  ▾ main")
-    t.eq(lines[3], "    ▾ opus задача w1:p1")
+    t.eq(lines[2], "  ▾ opus задача w1:p1")
     t.eq(
-      lines[4],
-      "      ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
+      lines[3],
+      "    ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
     )
-    t.eq(lines[5], "          🔧 Wait for background sleep command output")
-    t.eq(lines[#lines], "      $ cargo /src")
+    t.eq(lines[4], "        🔧 Wait for background sleep command output")
+    t.eq(lines[#lines], "    $ cargo /src")
     -- повторный вызов не открывает второе окно
     local wins = #vim.api.nvim_tabpage_list_wins(0)
     vim.cmd("wincmd p")
@@ -166,9 +166,10 @@ describe("Клавиши и действия", function()
           got[#got + 1] = "Y:" .. node.kind
         end,
       })
+      -- единственная вкладка своей строки не имеет: курсор встаёт на её workspace
       view.focus("w1:t1")
       press("Y")
-      t.eq(got[2], "Y:tab")
+      t.eq(got[2], "Y:workspace")
       local keys = {}
       for _, k in ipairs(view.keys()) do
         keys[k.key] = k.desc

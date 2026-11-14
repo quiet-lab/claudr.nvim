@@ -184,6 +184,7 @@ function M.ledger()
     finals = {}, -- id задачи → итоговое уведомление (со status)
     stops = {}, -- id задачи → true (результат TaskStop)
     agent_results = {}, -- id агента → status результата вызова Agent
+    prompts = {}, -- id субагента → первая непустая строка задания (первой записи транскрипта) или false
   }
 end
 
@@ -324,6 +325,16 @@ end
 function M.scan(ledger, text, owner)
   local n = #text
   local pos = 1
+  if owner and ledger.prompts and ledger.prompts[owner] == nil and n > 0 then
+    -- первая запись транскрипта субагента — его задание: первая непустая строка служит
+    -- подписью субагента без описания
+    local e = text:find("\n", 1, true) or (n + 1)
+    local rec = M.decode(text:sub(1, e - 1))
+    local body = type(rec) == "table" and rec.type == "user" and tbl(rec.message)
+    local prompt = body and content_text(body.content)
+    local line = prompt and vim.trim(prompt:match("[^\n]*%S[^\n]*") or "") or ""
+    ledger.prompts[owner] = line ~= "" and line or false
+  end
   local note = next_at(text, "task-notification", 1)
   local use = next_at(text, '"tool_use"', 1)
   local res = next_at(text, '"tool_use_id"', 1)
@@ -410,6 +421,12 @@ function M.build(ledger, metas, paired, owner_alive)
   for id, meta in pairs(metas) do
     if paired[id] then
       local s = M.subagent(id, meta)
+      if not s.description and s.tool_use_id then
+        -- описание из вызова Agent владельца, если meta.json его не хранит
+        local use = ledger.uses[s.tool_use_id]
+        s.description = use and str(use.input.description) or nil
+      end
+      s.prompt = ledger.prompts and ledger.prompts[id] or nil
       local final = ledger.finals[id]
       if final and (final.status == "completed" or final.status == "killed") then
         s.stop = final.status
