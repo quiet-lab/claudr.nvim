@@ -6,6 +6,7 @@ local feature_modules = {
   "claudr.tree",
   "claudr.view",
   "claudr.messaging",
+  "claudr.dialogs",
   "claudr.launch",
   "claudr.history",
   "claudr.questions",

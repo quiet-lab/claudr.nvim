@@ -65,6 +65,12 @@ local function add_view_keys(v)
       require("claudr.messaging").send_message({ node = node })
     end, "claudr: сообщение агенту")
   end
+  local dialog_key = require("claudr.config").get().dialogs.key
+  if dialog_key and (v.kind == "observe" or v.kind == "scrollback") then
+    map(dialog_key, function(node)
+      require("claudr.dialogs").open_for_node(node)
+    end, "claudr: буфер диалога")
+  end
   return v
 end
 

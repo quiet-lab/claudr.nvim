@@ -15,6 +15,8 @@ local defaults = {
     -- клавиша окна ввода в виде панели; `false` — не назначать
     key = "m",
   },
+  -- клавиша буфера диалога в виде панели; `false` — не назначать
+  dialogs = { key = "d" },
   -- клавиши ссылок на файлы в буферах плагина; `false` отключает клавишу
   file_references = { preview = "K", open = "gd" },
   code_questions = {
