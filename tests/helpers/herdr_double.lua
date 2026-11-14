@@ -626,6 +626,13 @@ handlers["pane.send_keys"] = function(self, params)
   return { type = "ok" }
 end
 
+handlers["pane.send_text"] = function(self, params)
+  if not self:_pane(params.pane_id) then
+    return nil, "pane_not_found", string.format(MESSAGES.pane_not_found, tostring(params.pane_id))
+  end
+  return { type = "ok" }
+end
+
 function D:_resolve_agent(target)
   local pane_id = self.agent_names[target] or target
   local p = self:_pane(pane_id)

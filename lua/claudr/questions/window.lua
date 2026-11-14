@@ -1,6 +1,7 @@
--- Окно ответа темы: буфер только для чтения сбоку, показ вопросов и ответов темы, переход
--- по ссылкам `файл:строка`. Буфер у каждой темы свой; содержимое строится из модели темы
--- (claudr.questions.topic) и перерисовывается при каждом её изменении.
+-- Окно ответа темы: буфер только для чтения сбоку, показ вопросов и ответов темы; ссылки
+-- на файлы (предпросмотр и переход) обслуживает claudr.refs. Буфер у каждой темы свой;
+-- содержимое строится из модели темы (claudr.questions.topic) и перерисовывается при
+-- каждом её изменении.
 local M = {}
 
 local NAME_PREFIX = "claudr://topic/"
@@ -9,8 +10,6 @@ local NAME_PREFIX = "claudr://topic/"
 M.keys = {
   ask = "a",
   retry = "R",
-  jump = "<CR>",
-  jump_alt = "gf",
   close = "q",
 }
 
@@ -109,91 +108,11 @@ function M.text(topic)
   return table.concat(vim.api.nvim_buf_get_lines(topic.buf, 0, -1, false), "\n")
 end
 
--- ---------- ссылки ----------
-
-local LINK = "([%w_%.%-/~]+):(%d+)"
-
---- Ссылка `файл:строка` под курсором (или первая в строке): путь и номер строки.
----@param line string
----@param col integer столбец курсора в байтах с нуля
-function M.link_at(line, col)
-  local first
-  local init = 1
-  while true do
-    local s, e, path, lnum = line:find(LINK, init)
-    if not s then
-      break
-    end
-    if path:find("[%./]") and not path:match("^%d+$") then
-      local link = { path = path, line = tonumber(lnum) }
-      first = first or link
-      if col + 1 >= s and col + 1 <= e then
-        return link
-      end
-    end
-    init = e + 1
-  end
-  return first
-end
-
-local function is_edit_window(win)
-  local b = vim.api.nvim_win_get_buf(win)
-  return vim.bo[b].buftype == ""
-    and not buf_topic[b]
-    and vim.api.nvim_win_get_config(win).relative == ""
-end
-
-local function edit_window()
-  local prev = vim.fn.win_getid(vim.fn.winnr("#"))
-  if prev ~= 0 and is_edit_window(prev) then
-    return prev
-  end
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if is_edit_window(win) then
-      return win
-    end
-  end
-  vim.cmd("topleft vsplit")
-  local win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
-  return win
-end
-
---- Переход по ссылке под курсором окна ответа: файл открывается в окне редактирования на
---- указанной строке. Относительный путь берётся от каталога проекта темы.
----@param topic table
-function M.jump(topic)
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local line = vim.api.nvim_get_current_line()
-  local link = M.link_at(line, cursor[2])
-  if not link then
-    vim.notify(
-      "claudr: под курсором нет ссылки файл:строка",
-      vim.log.levels.WARN
-    )
-    return false
-  end
-  local path = vim.fs.normalize(link.path)
-  if not vim.startswith(path, "/") then
-    path = vim.fs.joinpath(topic.record.project_dir, path)
-  end
-  if not vim.uv.fs_stat(path) then
-    vim.notify("claudr: файл не найден: " .. link.path, vim.log.levels.WARN)
-    return false
-  end
-  local win = edit_window()
-  vim.api.nvim_set_current_win(win)
-  vim.cmd.edit(vim.fn.fnameescape(path))
-  local count = vim.api.nvim_buf_line_count(0)
-  vim.api.nvim_win_set_cursor(win, { math.min(link.line, count), 0 })
-  return true
-end
-
 -- ---------- буфер и окно ----------
 
 --- Создаёт буфер темы (если его нет) и вешает клавиши.
 ---@param topic table
----@param actions { ask: fun(), retry: fun(), jump: fun() }
+---@param actions { ask: fun(), retry: fun() }
 function M.ensure_buffer(topic, actions)
   if topic.buf and vim.api.nvim_buf_is_valid(topic.buf) then
     return topic.buf
@@ -216,12 +135,12 @@ function M.ensure_buffer(topic, actions)
     actions.retry,
     "claudr: повторить вопрос после ошибки"
   )
-  map(M.keys.jump, actions.jump, "claudr: перейти по ссылке файл:строка")
-  map(
-    M.keys.jump_alt,
-    actions.jump,
-    "claudr: перейти по ссылке файл:строка"
-  )
+  -- ссылки на файлы: относительные пути — от каталога проекта темы
+  require("claudr.refs").attach(bufnr, {
+    cwd = function()
+      return topic.record and topic.record.project_dir
+    end,
+  })
   map(M.keys.close, function()
     if #vim.api.nvim_tabpage_list_wins(0) > 1 then
       vim.api.nvim_win_close(0, false)

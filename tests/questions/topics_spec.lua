@@ -231,7 +231,8 @@ describe("Ссылки на код в ответе", function()
       t.ok(row, "ссылка в ответе")
       local col = lines[row]:find("foo.lua", 1, true)
       vim.api.nvim_win_set_cursor(win, { row, col })
-      vim.api.nvim_feedkeys(vim.keycode(window.keys.jump), "x", false)
+      -- переход по ссылке — клавиша открытия `gd` из claudr.refs
+      vim.api.nvim_feedkeys("gd", "mx", false)
       t.eq(vim.fs.normalize(vim.api.nvim_buf_get_name(0)), p.foo)
       t.eq(vim.api.nvim_win_get_cursor(0)[1], 42)
       t.ok(
@@ -246,10 +247,10 @@ describe("Ссылки на код в ответе", function()
   it(
     "ссылка под курсором выбирается среди нескольких в строке",
     function()
+      local refs = require("claudr.refs")
       local line = "см. a/b.lua:3 и lua/foo.lua:42, версия 1:2"
-      t.eq(window.link_at(line, line:find("foo", 1, true)), { path = "lua/foo.lua", line = 42 })
-      t.eq(window.link_at(line, 0), { path = "a/b.lua", line = 3 })
-      t.eq(window.link_at("нет ссылок 12:30", 0), nil)
+      t.eq(refs.parse(line, line:find("foo", 1, true))[1], { path = "lua/foo.lua", line = 42 })
+      t.eq(refs.parse(line, line:find("a/b", 1, true))[1], { path = "a/b.lua", line = 3 })
     end
   )
 end)

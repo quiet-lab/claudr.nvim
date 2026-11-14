@@ -48,6 +48,23 @@ function M.settle()
   end, "отложенный шаг цикла")
 end
 
+--- Слежение за сессией (`claudr.data.watch_session`) с ожиданием конца первого чтения
+--- транскриптов: чтение асинхронное, состояние полно после `loaded()`. `on_change`
+--- получает только изменения после первого чтения.
+function M.watch_session(session_id, on_change)
+  local ready = false
+  local h = require("claudr.data").watch_session(session_id, function(s)
+    if ready and on_change then
+      on_change(s)
+    end
+  end)
+  t.wait(function()
+    return h:loaded()
+  end, "первое чтение транскриптов сессии")
+  ready = true
+  return h
+end
+
 --- Считает вызовы `vim.uv.fs_open` и `vim.uv.fs_read` (чтения файлов) до `restore()`.
 function M.count_reads()
   local counter = { open = 0, read = 0, paths = {} }
@@ -135,6 +152,51 @@ function M.split_transcript(path, stop_at)
   f:write(table.concat(head, "\n") .. "\n")
   f:close()
   return rest
+end
+
+--- Записи вызова инструмента `name`, который учёт не разбирает, и его результата с
+--- содержимым `size` байт: строки, которые отбор строк учёта пропускает.
+function M.filler_records(session_id, n, name, size)
+  local call = fixtures.assistant_record(session_id, "")
+  local id = string.format("toolu_01FixtureFiller%08d", n)
+  call.message.content = {
+    { type = "tool_use", id = id, name = name, input = { file_path = "/srv/demo/alpha/f" .. n } },
+  }
+  local result = fixtures.user_record(session_id, "")
+  result.message.content = {
+    { tool_use_id = id, type = "tool_result", content = string.rep("x", size) },
+  }
+  return { call, result }
+end
+
+--- Синтетический транскрипт для проверок асинхронного чтения: в начале запуск фоновой
+--- команды `bbig0001`, затем `count` пар заполнителей по `size` байт, в конце уведомление
+--- о завершении команды с кодом выхода 0. Пишется в `path` (файл заменяется).
+function M.big_transcript(path, session_id, count, size)
+  local f = assert(io.open(path, "w"))
+  local function put(records)
+    for _, r in ipairs(records) do
+      f:write(vim.json.encode(r), "\n")
+    end
+  end
+  put(
+    M.bash_launch(session_id, "toolu_01FixtureBig000000000001", "bbig0001", "sleep 1", "/x.output")
+  )
+  for i = 1, count do
+    put(M.filler_records(session_id, i, i % 2 == 0 and "Read" or "Bash", size))
+  end
+  put({
+    M.notification_user_record(
+      session_id,
+      fixtures.notification_block({
+        task_id = "bbig0001",
+        tool_use_id = "toolu_01FixtureBig000000000001",
+        status = "completed",
+        summary = 'Background command "sleep 1" completed (exit code 0)',
+      })
+    ),
+  })
+  f:close()
 end
 
 --- Число запущенных таймеров цикла libuv.

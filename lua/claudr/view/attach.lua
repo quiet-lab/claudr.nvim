@@ -112,6 +112,14 @@ function M.open(node, opts)
     end
   end
   window.register(v)
+  -- ссылки на файлы действуют в нормальном режиме, после выхода из режима ввода терминала
+  require("claudr.refs").attach(buf, {
+    cwd = function()
+      local live = require("claudr.tree.model").get(node.id) or node
+      local d = live.data
+      return d and (d.cwd or d.foreground_cwd) or nil
+    end,
+  })
   vim.cmd.startinsert()
   return v
 end

@@ -5,6 +5,11 @@
 --   * каталог сессии — пока нет subagents/; когда он создан, наблюдение переходит на него;
 --   * subagents/ — meta.json и транскрипты субагентов (посторонние файлы и каталоги
 --     пропускаются).
+-- Транскрипты читаются асинхронно порциями (claudr.data.fs.read_lines_async) по одному
+-- файлу за раз: главный поток Neovim не ждёт чтения больших файлов. Уведомление,
+-- пришедшее во время чтения файла, вызывает ещё одно чтение этого файла после текущего.
+-- Подписчик получает состояние, когда прочитаны все поставленные файлы; до этого
+-- `state()` отдаёт последнее согласованное состояние, а не прочитанное наполовину.
 -- Таймеров и опроса нет; каждое чтение вызвано уведомлением или созданием наблюдения.
 local fs = require("claudr.data.fs")
 local parse = require("claudr.data.parse")
@@ -25,6 +30,10 @@ function M.new(data, session_id, on_change)
     metas = {}, -- id субагента → разобранный meta.json
     paired = {}, -- id субагента → true, если есть его транскрипт
     sub_tails = {}, -- id субагента → читатель транскрипта
+    jobs = {}, -- очередь чтений: { key = путь, tail, owner, again }
+    queued = {}, -- путь → чтение в очереди
+    running = nil, -- идущее чтение
+    loading = false, -- первое чтение транскриптов после присоединения не закончено
   }, Session)
   local path = data.find_transcript(session_id)
   if path then
@@ -37,7 +46,7 @@ function M.new(data, session_id, on_change)
       self:_emit()
     end)
   end
-  self.last = self:state()
+  self.last = self:_compute()
   return self
 end
 
@@ -49,6 +58,7 @@ function Session:_attach(path)
   self.session_dir = path:sub(1, -7)
   self.subagents_dir = self.session_dir .. "/subagents"
   self.owner_tail = fs.tail(path)
+  self.loading = true
   local name = fs.basename(path)
   local session_name = fs.basename(self.session_dir)
   self.project_watch = fs.watch(fs.dirname(path), function(filename)
@@ -64,17 +74,60 @@ function Session:_attach(path)
   self:_session_dir_changed()
 end
 
-local function feed_lines(ledger, lines, owner)
-  for _, line in ipairs(lines or {}) do
-    local rec = parse.decode(line)
-    if rec then
-      parse.feed(ledger, rec, owner)
-    end
+-- Поставить чтение файла `key` (читатель `tail`, владелец `owner`) в очередь. Файл уже
+-- в очереди — ничего; файл читается сейчас — после текущего чтения он читается ещё раз.
+function Session:_queue(key, tail, owner)
+  if self.closed or self.queued[key] then
+    return
   end
+  if self.running and self.running.key == key then
+    self.running.again = true
+    return
+  end
+  local job = { key = key, tail = tail, owner = owner }
+  self.queued[key] = job
+  self.jobs[#self.jobs + 1] = job
+  self:_pump()
+end
+
+-- Начать следующее чтение очереди; очередь пуста — первое чтение закончено, подписчик
+-- получает состояние.
+function Session:_pump()
+  if self.closed or self.running then
+    return
+  end
+  local job = table.remove(self.jobs, 1)
+  if not job then
+    self.loading = false
+    self:_emit()
+    return
+  end
+  self.queued[job.key] = nil
+  self.running = job
+  fs.read_lines_async(job.tail, function(text)
+    parse.scan(self.ledger, text, job.owner)
+  end, function(found)
+    self.running = nil
+    if found and job.owner then
+      self.paired[job.owner] = true
+    end
+    if job.again then
+      job.again = false
+      self.queued[job.key] = job
+      self.jobs[#self.jobs + 1] = job
+    end
+    self:_pump()
+  end, function()
+    return self.closed
+  end)
+end
+
+function Session:_busy()
+  return self.running ~= nil or #self.jobs > 0
 end
 
 function Session:_read_owner()
-  feed_lines(self.ledger, fs.read_lines(self.owner_tail), nil)
+  self:_queue(self.transcript, self.owner_tail, nil)
 end
 
 -- Каталог сессии: пока subagents/ нет, наблюдается каталог сессии; когда subagents/ создан,
@@ -125,11 +178,7 @@ function Session:_read_subagent_transcript(id)
     tail = fs.tail(path)
     self.sub_tails[id] = tail
   end
-  local lines = fs.read_lines(tail)
-  if lines then
-    self.paired[id] = true
-    feed_lines(self.ledger, lines, id)
-  end
+  self:_queue(path, tail, id)
 end
 
 function Session:_subagent_file(name)
@@ -158,22 +207,35 @@ function Session:_scan_subagents()
 end
 
 function Session:_emit()
-  if self.closed then
+  if self.closed or self:_busy() then
     return
   end
-  local s = self:state()
+  local s = self:_compute()
   if not vim.deep_equal(s, self.last) then
     self.last = s
     self.on_change(s)
   end
 end
 
---- Состояние сессии: `{ transcript = путь|nil, subagents = {[id] = …}, tasks = {[id] = …} }`
---- (форма записей — claudr.data.parse.build).
-function Session:state()
+function Session:_compute()
   local s = parse.build(self.ledger, self.metas, self.paired, self.owner_alive)
   s.transcript = self.transcript
   return s
+end
+
+--- Состояние сессии: `{ transcript = путь|nil, subagents = {[id] = …}, tasks = {[id] = …} }`
+--- (форма записей — claudr.data.parse.build). Пока идёт чтение транскриптов — последнее
+--- согласованное состояние (до конца первого чтения — без субагентов и команд).
+function Session:state()
+  if self:_busy() then
+    return self.last
+  end
+  return self:_compute()
+end
+
+--- Закончено ли первое чтение транскриптов сессии (транскрипта нет — закончено).
+function Session:loaded()
+  return not self.loading
 end
 
 --- Сообщение о панели владельца: false — процесс панели завершён или панель закрыта;

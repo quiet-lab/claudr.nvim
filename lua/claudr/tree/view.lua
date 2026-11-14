@@ -19,6 +19,7 @@ local S = {
   line_ids = {}, -- строка (с 1) → идентификатор узла
   collapsed = {}, -- идентификатор узла → true, если узел свёрнут
   unsubscribe = nil,
+  unsubscribe_pending = nil,
 }
 
 ---@class claudr.TreeAction
@@ -119,6 +120,19 @@ function M.state_text(node)
   return nil
 end
 
+--- Число ждущих запросов диалога узла (панель — вместе с запросами субагентов) или 0.
+function M.pending_count(node)
+  if node.kind ~= "pane" and node.kind ~= "subagent" then
+    return 0
+  end
+  local ok, pending = pcall(require, "claudr.dialogs.pending")
+  if not ok then
+    return 0
+  end
+  local cok, n = pcall(pending.count, node)
+  return cok and tonumber(n) or 0
+end
+
 --- Текст в одну строку: управляющие символы и переводы строк (в заголовках терминала,
 --- командах, описаниях) заменяются пробелом, подряд идущие сливаются. Модель хранит
 --- исходное значение; буфер Neovim принимает только строки без перевода строки.
@@ -180,6 +194,12 @@ local function compose()
       local group = HL[node.state] or HL.unknown
       marks[#marks + 1] = { #lines + 1, start, #line, group }
     end
+    local waiting = M.pending_count(node)
+    if waiting > 0 then
+      local start = #line + 1
+      line = line .. " [ждут: " .. waiting .. "]"
+      marks[#marks + 1] = { #lines + 1, start, #line, HL.blocked }
+    end
     lines[#lines + 1] = line
     ids[#lines] = node.id
     if not S.collapsed[node.id] then
@@ -211,12 +231,25 @@ function M.render()
   if not buf_valid() then
     return
   end
+  local lines, ids, marks = compose()
+  -- Содержимое не изменилось (например, снимок перечитан по событию вывода панели, а
+  -- подписи и состояния те же): буфер не перерисовывается.
+  local drawn = S.drawn
+  if
+    drawn
+    and drawn.buf == S.buf
+    and vim.deep_equal(drawn.lines, lines)
+    and vim.deep_equal(drawn.marks, marks)
+  then
+    S.line_ids = ids
+    return
+  end
+  S.drawn = { buf = S.buf, lines = lines, marks = marks }
   local keep = {}
   for _, win in ipairs(vim.fn.win_findbuf(S.buf)) do
     local row = vim.api.nvim_win_get_cursor(win)[1]
     keep[win] = { id = S.line_ids[row], row = row }
   end
-  local lines, ids, marks = compose()
   vim.bo[S.buf].modifiable = true
   vim.api.nvim_buf_set_lines(S.buf, 0, -1, false, lines)
   vim.bo[S.buf].modifiable = false
@@ -373,6 +406,13 @@ local function ensure_buf()
   if not S.unsubscribe then
     S.unsubscribe = model.subscribe(M.render)
   end
+  -- число ждущих запросов диалога меняется без событий модели
+  local pok, pending = pcall(require, "claudr.dialogs.pending")
+  if pok and not S.unsubscribe_pending then
+    S.unsubscribe_pending = pending.subscribe(function()
+      M.render()
+    end)
+  end
   local buf = S.buf
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buf,
@@ -384,6 +424,10 @@ local function ensure_buf()
         if S.unsubscribe then
           S.unsubscribe()
           S.unsubscribe = nil
+        end
+        if S.unsubscribe_pending then
+          S.unsubscribe_pending()
+          S.unsubscribe_pending = nil
         end
       end
     end,

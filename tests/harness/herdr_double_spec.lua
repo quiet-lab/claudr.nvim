@@ -544,6 +544,90 @@ describe("pane.send_keys и agent.*", function()
     })
   end)
 
+  it(
+    "agent.prompt агенту в working принимается и учитывается",
+    function()
+      d:set_agent_status("w1:p1", "working")
+      local f = client():call("agent.prompt", { target = "w1:p1", text = "ещё" })
+      t.eq(f.result.type, "agent_prompted")
+      t.eq(f.result.agent.agent_status, "working")
+      t.eq(d:count("agent.prompt"), 1)
+      t.eq(d:last("agent.prompt").params.text, "ещё")
+    end
+  )
+
+  it(
+    "blocked меняет снимок и даёт событие, возврат в working снимает отказ",
+    function()
+      local sub = client()
+      sub:call("events.subscribe", {
+        subscriptions = { { type = "pane.agent_status_changed", pane_id = "w1:p1" } },
+      })
+      d:set_agent_status("w1:p1", "blocked")
+      t.wait(function()
+        return #sub.frames == 2
+      end, "событие blocked")
+      t.eq(sub.frames[2].event, "pane.agent_status_changed")
+      t.eq(sub.frames[2].data.agent_status, "blocked")
+      t.eq(sub.frames[2].data.pane_id, "w1:p1")
+      local s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[1].agent_status, "blocked")
+      t.eq(
+        client():call("agent.prompt", { target = "w1:p1", text = "x" }).error.code,
+        "agent_blocked"
+      )
+      d:set_agent_status("w1:p1", "working")
+      t.eq(
+        client():call("agent.prompt", { target = "w1:p1", text = "y" }).result.type,
+        "agent_prompted"
+      )
+      t.eq(d:count("agent.prompt"), 2, "отклонённый запрос тоже учтён")
+    end
+  )
+
+  it(
+    "agent.prompt в blocked ничего не принимает: следующий запрос тоже отклонён",
+    function()
+      d:set_agent_status("w1:p1", "blocked")
+      for _, text in ipairs({ "a", "b" }) do
+        t.eq(
+          client():call("agent.prompt", { target = "w1:p1", text = text }).error.code,
+          "agent_blocked"
+        )
+      end
+      local s = client():call("session.snapshot").result.snapshot
+      t.eq(s.panes[1].agent_status, "blocked")
+    end
+  )
+
+  it(
+    "pane.send_text, pane.send_keys и pane.read учитываются в requests и count",
+    function()
+      t.eq(d:count("pane.send_text"), 0)
+      t.eq(d:count("pane.send_keys"), 0)
+      t.eq(d:count("pane.read"), 0)
+      local f = client():call("pane.send_text", { pane_id = "w1:p1", text = "1" })
+      t.eq(f.result, { type = "ok" })
+      client():call("pane.send_keys", { pane_id = "w1:p1", keys = { "enter" } })
+      client():call("pane.read", { pane_id = "w1:p1", source = "visible" })
+      t.eq(d:count("pane.send_text"), 1)
+      t.eq(d:count("pane.send_keys"), 1)
+      t.eq(d:count("pane.read"), 1)
+      t.eq(d:last("pane.send_text").params.text, "1")
+      local methods = {}
+      for _, r in ipairs(d.requests) do
+        methods[r.method] = true
+      end
+      t.ok(methods["pane.send_text"] and methods["pane.send_keys"] and methods["pane.read"])
+    end
+  )
+
+  it("pane.send_text в несуществующую панель — pane_not_found", function()
+    local f = client():call("pane.send_text", { pane_id = "w1:p9", text = "x" })
+    t.eq(f.error.code, "pane_not_found")
+    t.eq(d:count("pane.send_text"), 1)
+  end)
+
   it("agent.prompt без агента — agent_not_found", function()
     local f = client():call("agent.prompt", { target = "w1:p2", text = "x" })
     t.eq(f.error.code, "agent_not_found")
