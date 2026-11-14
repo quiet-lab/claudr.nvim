@@ -70,3 +70,21 @@ describe("Контейнеры — перечень панелей", function()
     vim.api.nvim_win_close(v.win, true)
   end)
 end)
+
+describe("Подписи панелей в перечне", function()
+  it(
+    "многострочные подписи показываются одной строкой",
+    function()
+      s.big_editor()
+      s.env(
+        s.snapshot({
+          double.pane({ pane_id = "w1:p1", foreground_process = "tool\nsecond", cwd = "/src" }),
+        }),
+        { "owner-dialogue" }
+      )
+      s.wait_node("w1:p1")
+      local v = view.open(model.get("w1:t1"))
+      t.eq(lines(v.buf), { "$ tool second /src" })
+    end
+  )
+end)

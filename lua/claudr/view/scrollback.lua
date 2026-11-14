@@ -47,7 +47,9 @@ function M.open(node)
   local pane_id = node.id
   local buf = window.scratch()
   vim.bo[buf].modifiable = false
-  local win = window.open_float(buf, { title = "история: " .. (node.label or pane_id) })
+  local win = window.open_float(buf, {
+    title = "история: " .. require("claudr.tree.view").one_line(node.label or pane_id),
+  })
   local v = { kind = "scrollback", node_id = pane_id, buf = buf, win = win }
   vim.b[buf].claudr_node_id = pane_id
   function v.dispose() end
