@@ -173,10 +173,11 @@ function M.setup()
   require("claudr.dialogs.notify").start()
   local p = pending()
   if p and p.start then
-    local ok, err = pcall(p.start)
-    if not ok then
+    local ok, started, err = pcall(p.start)
+    if not ok or not started then
       notify(
-        "claudr: сокет диалогов не запущен: " .. tostring(err),
+        "claudr: сокет диалогов не запущен: "
+          .. tostring(ok and err or started),
         vim.log.levels.WARN
       )
     end
