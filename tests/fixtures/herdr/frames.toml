@@ -1,0 +1,23 @@
+# Образец конфигурации: кадры и периоды.
+onboarding = true
+
+[theme]
+name = "demo"
+notes = """
+многострочное значение в постороннем разделе
+"""
+
+[ui]
+sidebar_width = 30 # посторонний ключ
+status_indicators = "dots"
+
+[ui.status_icons]
+working = [
+  "a", # первый кадр
+  "b",
+]
+idle = "c"
+frame_interval_ms = { working = 80 }
+
+[[hooks]]
+name = 'x'

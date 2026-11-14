@@ -1,0 +1,5 @@
+[ui]
+status_indicators = "symbols"
+
+[ui.status_icons]
+working = "x"

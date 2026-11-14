@@ -1,0 +1,3 @@
+[ui.status_icons]
+working = ["a", "b"]
+frame_interval_ms = 10

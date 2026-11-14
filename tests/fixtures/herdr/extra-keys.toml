@@ -1,0 +1,4 @@
+[ui.status_icons]
+working = ["a", "b"]
+frame_phase = "per_row"
+frame_speed_spread = { working = 20, blocked = 10 }

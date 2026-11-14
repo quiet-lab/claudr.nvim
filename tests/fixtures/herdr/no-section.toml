@@ -1,0 +1,6 @@
+# В файле нет раздела значков.
+[theme]
+name = "demo"
+
+[ui]
+sidebar_width = 30
