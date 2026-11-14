@@ -113,7 +113,8 @@ describe("Панель — наблюдение за терминалом", func
     s.wait_exit(v, "наблюдение завершено")
     t.ok(not s.alive(v.pid), "процесс наблюдения завершён")
     t.ok(not vim.api.nvim_buf_is_valid(v.buf), "буфер вида удалён")
-    t.eq(v.exited.signal, 9)
+    -- завершён сигналом SIGTERM: поддельный herdr выходит кодом 143
+    t.eq(v.exited.code, 143)
     -- панель живёт: клиент ничего не просил у сервера, панель в снимке
     t.eq(requests_except_snapshot(d), {})
     t.ok(model.get("w1:p1"), "панель в дереве")
