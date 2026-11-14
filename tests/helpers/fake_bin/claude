@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Поддельный claude: см. tests/helpers/fake_claude/main.lua и tests/helpers/fake_claude.lua.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec nvim --headless --clean -u NONE -i NONE -l "$here/../fake_claude/main.lua" "$@"
