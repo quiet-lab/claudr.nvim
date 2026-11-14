@@ -16,10 +16,15 @@ M.fixtures = fixtures
 local current
 
 --- Окружение теста: каталог данных Claude Code с образцами `samples`, двойник herdr со
---- снимком `snapshot`, запущенная модель, подписки клиента по всем панелям. Возвращает
---- двойник.
-function M.env(snapshot, samples)
+--- снимком `snapshot`, запущенная модель, подписки клиента по всем панелям, законченное
+--- первое чтение транскриптов сессий панелей. `prepare(dir)` (необязательно) вызывается
+--- после установки образцов до запуска модели; `opts.loaded = false` — не ждать чтения
+--- транскриптов. Возвращает двойник.
+function M.env(snapshot, samples, prepare, opts)
   M.claude_dir = u.fresh(samples)
+  if prepare then
+    prepare(M.claude_dir)
+  end
   local d = double.start({ dir = hsupport.dir("tree"), snapshot = snapshot })
   current = d
   model.start()
@@ -36,7 +41,22 @@ function M.env(snapshot, samples)
       return d:count("session.snapshot") >= 2 and not reading
     end, "снимок после подписки по панелям")
   end
+  if not (opts and opts.loaded == false) then
+    M.wait_loaded()
+  end
   return d
+end
+
+--- Ждать конца первого чтения транскриптов всех сессий панелей модели.
+function M.wait_loaded()
+  t.wait(function()
+    for _, rec in pairs(model._sessions()) do
+      if not rec.handle:loaded() then
+        return false
+      end
+    end
+    return true
+  end, "первое чтение транскриптов сессий")
 end
 
 --- Уборка после теста: модель, клиент, двойник, настройки.

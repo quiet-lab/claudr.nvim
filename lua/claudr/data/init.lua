@@ -224,17 +224,37 @@ function M.watch_dialogue(session_id_or_path, on_replies)
     local tail = fs.tail(path)
     local name = fs.basename(path)
     local dir = fs.dirname(path)
+    -- Чтение асинхронное, порциями, по одному за раз (`h.reading`); уведомление во время
+    -- чтения вызывает ещё одно чтение после текущего.
+    local again = false
     local function pump()
       if h.closed then
         return
       end
-      local lines = fs.read_lines(tail)
-      if lines and #lines > 0 then
+      if h.reading then
+        again = true
+        return
+      end
+      h.reading, again = true, false
+      fs.read_lines_async(tail, function(text)
+        local lines = {}
+        for line in text:gmatch("([^\n]*)\n") do
+          if line ~= "" then
+            lines[#lines + 1] = line
+          end
+        end
         local replies = parse.replies(lines)
         if #replies > 0 then
           on_replies(replies)
         end
-      end
+      end, function()
+        h.reading = false
+        if again then
+          pump()
+        end
+      end, function()
+        return h.closed
+      end)
     end
     h.wait = fs.wait_path(dir, function()
       if h.closed then
@@ -246,7 +266,11 @@ function M.watch_dialogue(session_id_or_path, on_replies)
         end
       end)
       -- уже записанное отдаётся отдельным шагом цикла, после возврата handle
-      vim.schedule(pump)
+      h.reading = true
+      vim.schedule(function()
+        h.reading = false
+        pump()
+      end)
     end)
   end
 
@@ -277,9 +301,11 @@ function M.watch_dialogue(session_id_or_path, on_replies)
   return h
 end
 
---- Следит за сессией: транскрипт владельца, субагенты, фоновые команды. Состояние доступно
---- сразу (`handle:state()`), `on_change(state)` вызывается при каждом изменении состояния по
---- уведомлениям файловой системы и по `set_owner_alive`. Подробности — claudr.data.session.
+--- Следит за сессией: транскрипт владельца, субагенты, фоновые команды. Транскрипты
+--- читаются асинхронно: `handle:state()` до конца первого чтения (`handle:loaded()`) отдаёт
+--- состояние без субагентов и команд; `on_change(state)` вызывается при каждом изменении
+--- состояния — после первого чтения, по уведомлениям файловой системы и по
+--- `set_owner_alive`. Подробности — claudr.data.session.
 function M.watch_session(session_id, on_change)
   return require("claudr.data.session").new(M, session_id, on_change)
 end
