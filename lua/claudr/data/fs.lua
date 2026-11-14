@@ -51,6 +51,11 @@ function M.list_dir(path)
     if not name then
       break
     end
+    if not kind then
+      -- файловая система не сообщила вид элемента
+      local st = uv.fs_stat(path .. "/" .. name)
+      kind = st and st.type or nil
+    end
     out[#out + 1] = { name = name, type = kind }
   end
   return out

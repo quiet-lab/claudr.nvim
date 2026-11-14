@@ -29,7 +29,8 @@ function M.new(data, session_id, on_change)
   local path = data.find_transcript(session_id)
   if path then
     self:_attach(path)
-  elseif type(session_id) == "string" and session_id ~= "" then
+  else
+    -- недопустимый идентификатор locator не наблюдает
     self.locator = data._locate(session_id, function(found)
       self.locator = nil
       self:_attach(found)

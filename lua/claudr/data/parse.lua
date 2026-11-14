@@ -15,7 +15,7 @@ end
 --- Запись из строки JSON или nil (повреждённая строка, не объект).
 function M.decode(line)
   local ok, rec = pcall(vim.json.decode, line)
-  if ok and type(rec) == "table" then
+  if ok and type(rec) == "table" and not (rec[1] ~= nil and vim.islist(rec)) then
     return rec
   end
   return nil

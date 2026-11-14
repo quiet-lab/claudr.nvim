@@ -121,6 +121,11 @@ end
 --- объект с `close()`.
 function M._locate(session_id, cb)
   local L = { closed = false, dirs = {} }
+  if not valid_id(session_id) then
+    L.closed = true
+    L.close = function() end
+    return L
+  end
   local name = session_id .. ".jsonl"
   local projects = projects_dir()
 

@@ -67,6 +67,76 @@ function M.count_reads()
   return counter
 end
 
+--- Записи запуска фоновой команды Bash: вызов `tool_use` и результат с идентификатором задачи
+--- и путём файла вывода (как в транскрипте субагента — без `toolUseResult`).
+function M.bash_launch(session_id, tool_id, task_id, command, output_file)
+  local call = fixtures.assistant_record(session_id, "")
+  call.message.content = {
+    {
+      type = "tool_use",
+      id = tool_id,
+      name = "Bash",
+      input = { command = command, description = "test command", run_in_background = true },
+    },
+  }
+  local result = fixtures.user_record(session_id, "")
+  result.message.content = {
+    {
+      tool_use_id = tool_id,
+      type = "tool_result",
+      content = "Command running in background with ID: "
+        .. task_id
+        .. ". Output is being written to: "
+        .. output_file
+        .. ". You will be notified when it completes.",
+    },
+  }
+  return { call, result }
+end
+
+--- Запись `attachment` `queued_command` с блоком уведомления (доставка посреди хода).
+function M.attachment_record(session_id, block)
+  return {
+    type = "attachment",
+    isSidechain = false,
+    sessionId = session_id,
+    timestamp = "2026-11-14T06:00:11.000Z",
+    attachment = {
+      type = "queued_command",
+      prompt = block,
+      commandMode = "task-notification",
+      origin = { kind = "task-notification", producer = "session-task" },
+    },
+  }
+end
+
+--- Запись `user` с блоком уведомления (доставка на простое сессии).
+function M.notification_user_record(session_id, block)
+  local r = fixtures.user_record(session_id, block)
+  r.origin = { kind = "task-notification" }
+  return r
+end
+
+--- Сохраняет первые строки образца (до первой строки, содержащей `stop_at`) в новый файл
+--- транскрипта и возвращает остальные строки.
+function M.split_transcript(path, stop_at)
+  local f = assert(io.open(path, "rb"))
+  local text = f:read("*a")
+  f:close()
+  local head, rest = {}, {}
+  for line in text:gmatch("[^\n]+") do
+    if #rest == 0 and not line:find(stop_at, 1, true) then
+      head[#head + 1] = line
+    else
+      rest[#rest + 1] = line
+    end
+  end
+  f = assert(io.open(path, "wb"))
+  f:write(table.concat(head, "\n") .. "\n")
+  f:close()
+  return rest
+end
+
 --- Число запущенных таймеров цикла libuv.
 function M.timer_count()
   local n = 0
