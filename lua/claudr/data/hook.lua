@@ -171,6 +171,31 @@ function M.decision_attachment(rec)
   return { decision = decision, tool_use_id = id }
 end
 
+--- События диалогов из строк транскрипта по порядку записей и блоков:
+--- `{ type = "call", id, name, input }` (вызов инструмента), `{ type = "result", id, is_error }`
+--- (результат вызова), `{ type = "decision", id, decision }` (вложение решения хука); `id` —
+--- идентификатор вызова. Повреждённые строки и записи других видов пропускаются.
+function M.events(lines)
+  local decode = require("claudr.data.parse").decode
+  local out = {}
+  for _, line in ipairs(lines or {}) do
+    local rec = decode(line)
+    if rec then
+      for _, u in ipairs(M.tool_uses(rec)) do
+        out[#out + 1] = { type = "call", id = u.id, name = u.name, input = u.input }
+      end
+      for _, r in ipairs(M.tool_results(rec)) do
+        out[#out + 1] = { type = "result", id = r.tool_use_id, is_error = r.is_error }
+      end
+      local d = M.decision_attachment(rec)
+      if d then
+        out[#out + 1] = { type = "decision", id = d.tool_use_id, decision = d.decision }
+      end
+    end
+  end
+  return out
+end
+
 --- Глубокое равенство значений JSON: порядок ключей не важен, `vim.NIL` равен `vim.NIL`.
 function M.equal_input(a, b)
   return vim.deep_equal(a, b)

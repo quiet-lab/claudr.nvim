@@ -1,0 +1,9 @@
+{
+  "name": "claudr",
+  "version": "0.1.0",
+  "description": "Ответ на диалоги Claude Code из Neovim: хук PermissionRequest передаёт запрос плагину claudr.nvim и возвращает его решение",
+  "author": {
+    "name": "quiet-lab"
+  },
+  "repository": "https://github.com/quiet-lab/claudr.nvim"
+}
