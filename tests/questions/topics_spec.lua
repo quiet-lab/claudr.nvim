@@ -99,6 +99,9 @@ describe("Восстановление окна темы", function()
       restart()
       local starts = #p.ctl:starts()
       local restored = q.open_topic(id)
+      t.wait(function()
+        return restored.restoring == nil
+      end, "конец чтения транскрипта темы")
       local text = window.text(restored)
       t.ok(text:find("Первый вопрос", 1, true), text)
       t.ok(text:find("Второй вопрос", 1, true))
@@ -114,6 +117,50 @@ describe("Восстановление окна темы", function()
       q.continue(id, { question = "Третий" })
       env.wait_idle(restored)
       t.eq(env.arg(p.ctl:starts()[starts + 1].argv, "--resume"), id)
+    end
+  )
+
+  it(
+    "Транскрипт читается асинхронно: окно открывается до чтения, повторное восстановление ждёт конца",
+    function()
+      local p = env.project()
+      env.edit(p.foo, 4)
+      local topic = env.ask({ question = "Первый вопрос" })
+      env.wait_idle(topic)
+      local id = topic.id
+      restart()
+      local restored = q.open_topic(id)
+      t.ok(
+        restored.restoring ~= nil,
+        "чтение не закончено при возврате"
+      )
+      t.eq(#restored.entries, 0, "записей ещё нет")
+      t.eq(restored.unavailable, false)
+      local second = false
+      topic_mod.restore(restored, function()
+        second = true
+      end)
+      t.ok(
+        not second,
+        "повторное восстановление ждёт конца чтения"
+      )
+      t.wait(function()
+        return second
+      end, "конец чтения транскрипта темы")
+      t.eq(restored.restoring, nil)
+      t.eq(#restored.entries, 1)
+      t.match(window.text(restored), "Первый вопрос")
+      -- продолжение до конца чтения ждёт его: новый вопрос встаёт после прежних
+      restart()
+      local again = q.continue(id, { question = "Второй вопрос" })
+      t.eq(#again.entries, 0, "вопрос ещё не отправлен")
+      t.wait(function()
+        return #again.entries == 2
+      end, "вопрос отправлен после чтения")
+      env.wait_idle(again)
+      t.eq(#again.entries, 2)
+      t.match(again.entries[1].question, "Первый вопрос")
+      t.match(again.entries[2].question, "Второй вопрос")
     end
   )
 
@@ -169,6 +216,9 @@ describe("Возврат к теме", function()
       local opened = q.last_topic()
       t.eq(opened.id, a_id)
       t.eq(vim.api.nvim_get_current_buf(), opened.buf)
+      t.wait(function()
+        return opened.restoring == nil
+      end, "конец чтения транскрипта темы")
       t.match(window.text(opened), "Снова А")
     end
   )

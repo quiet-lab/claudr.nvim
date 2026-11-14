@@ -79,6 +79,9 @@ describe("Выход из Neovim во время ответа", function()
       -- новый Neovim: тема открывается из реестра, ответ виден из транскрипта
       env.reset(nil, true)
       local topic = q.open_topic(id)
+      t.wait(function()
+        return topic.restoring == nil
+      end, "конец чтения транскрипта темы")
       local text = window.text(topic)
       t.match(
         text,

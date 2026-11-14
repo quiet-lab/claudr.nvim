@@ -4,6 +4,7 @@
 -- Таймеров и опроса нет: всё выполняется по действию пользователя.
 local commands = require("claudr.commands")
 local data = require("claudr.data")
+local fs = require("claudr.data.fs")
 local herdr = require("claudr.herdr")
 
 local M = {}
@@ -35,21 +36,31 @@ local function live_sessions()
   return out
 end
 
---- Сессии каталога проекта: существующие транскрипты, без тем вопросов по коду, новые первыми.
---- В записи к полям `claudr.data` добавлено `running` — совпадение с сессией живой панели.
+-- Номер последнего перечня: более новый запрос делает прежний устаревшим.
+local list_gen = 0
+
+--- Сессии каталога проекта асинхронно: `cb(entries)` — существующие транскрипты, без тем
+--- вопросов по коду, новые первыми. В записи к полям `claudr.data` добавлено `running` —
+--- совпадение с сессией живой панели. Устаревший запрос (новый вызов) `cb` не вызывает.
 ---@param project_dir string
----@return table[]
-function M.entries(project_dir)
+---@param cb fun(entries: table[])
+function M.entries(project_dir, cb)
+  list_gen = list_gen + 1
+  local gen = list_gen
   local registry = require("claudr.questions.registry")
   local live = live_sessions()
-  local out = {}
-  for _, s in ipairs(data.list_sessions(project_dir)) do
-    if not registry.is_topic(s.id) then
-      s.running = live[s.id] == true
-      out[#out + 1] = s
+  data.list_sessions(project_dir, function(list)
+    local out = {}
+    for _, s in ipairs(list) do
+      if not registry.is_topic(s.id) then
+        s.running = live[s.id] == true
+        out[#out + 1] = s
+      end
     end
-  end
-  return out
+    cb(out)
+  end, function()
+    return gen ~= list_gen
+  end)
 end
 
 --- Начало первой реплики пользователя в одну строку.
@@ -75,11 +86,12 @@ function M.format_entry(entry)
   )
 end
 
--- Строки буфера диалога: заголовок реплики и её текст с отступом.
-local function dialogue_lines(replies)
+-- Строки буфера диалога для реплик; `first` — реплики начинаются с начала диалога
+-- (между репликами — пустая строка).
+local function dialogue_lines(replies, first)
   local lines = {}
   for i, r in ipairs(replies) do
-    if i > 1 then
+    if i > 1 or not first then
       lines[#lines + 1] = ""
     end
     lines[#lines + 1] = r.role == "user" and "Пользователь:" or "Агент:"
@@ -90,16 +102,40 @@ local function dialogue_lines(replies)
   return lines
 end
 
---- Открывает диалог сессии в новом окне, буфер только для чтения. Транскрипт, которого уже
---- нет, — сообщение о недоступности. Возвращает номер буфера или `nil`.
+-- Дописывает строки в буфер только для чтения; `first` — первая порция заменяет
+-- содержимое пустого буфера.
+local function append(buf, lines, first)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  vim.bo[buf].readonly = false
+  vim.bo[buf].modifiable = true
+  if first then
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  else
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, lines)
+  end
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].readonly = true
+  vim.bo[buf].modified = false
+end
+
+--- Открывает диалог сессии в новом окне, буфер только для чтения. Реплики читаются
+--- асинхронно порциями и дописываются в буфер по мере чтения; по концу чтения (реплик и
+--- рабочего каталога сессии) буферная переменная `claudr_loaded` становится истинной.
+--- Закрытие окна (удаление буфера) и повторное открытие той же сессии прекращают чтение.
+--- Транскрипта, которого уже нет, — сообщение о недоступности. Возвращает номер буфера или
+--- `nil`.
 ---@param entry table запись перечня (нужны `id` и `path`)
 function M.open_dialogue(entry)
-  local replies = data.read_dialogue(entry.path)
-  if not replies then
+  local function unavailable()
     notify(
       ("транскрипт сессии %s недоступен"):format(entry.id),
       vim.log.levels.WARN
     )
+  end
+  if not fs.is_file(entry.path) then
+    unavailable()
     return nil
   end
   local name = M.BUF_PREFIX .. entry.id
@@ -114,17 +150,43 @@ function M.open_dialogue(entry)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = M.FILETYPE
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, dialogue_lines(replies))
   vim.bo[buf].modifiable = false
   vim.bo[buf].readonly = true
   vim.bo[buf].modified = false
-  -- относительные пути ссылок — от рабочего каталога сессии из её транскрипта
-  local cwd = data.session_cwd(entry.path)
+  local function cancelled()
+    return not vim.api.nvim_buf_is_valid(buf)
+  end
+  -- относительные пути ссылок — от рабочего каталога сессии из её транскрипта; он
+  -- читается асинхронно, ссылки спрашивают его при переходе
+  local cwd
+  local parts = 2 -- чтение рабочего каталога и чтение реплик
+  local function part_done()
+    parts = parts - 1
+    if parts == 0 and vim.api.nvim_buf_is_valid(buf) then
+      vim.b[buf].claudr_loaded = true
+    end
+  end
+  data.session_cwd(entry.path, function(found)
+    cwd = found
+    part_done()
+  end, cancelled)
   require("claudr.refs").attach(buf, {
     cwd = function()
       return cwd
     end,
   })
+  local shown = 0
+  data.read_dialogue(entry.path, function(replies)
+    append(buf, dialogue_lines(replies, shown == 0), shown == 0)
+    shown = shown + #replies
+  end, function(found)
+    if not found then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      unavailable()
+      return
+    end
+    part_done()
+  end, cancelled)
   vim.keymap.set(
     "n",
     "q",
@@ -137,20 +199,21 @@ end
 --- Показывает перечень сессий проекта через `vim.ui.select`; выбор открывает диалог.
 ---@param project_dir string
 function M.show_project(project_dir)
-  local entries = M.entries(project_dir)
-  if #entries == 0 then
-    notify(
-      "в проекте нет сессий с доступными транскриптами"
-    )
-    return
-  end
-  vim.ui.select(entries, {
-    prompt = "Сессии проекта",
-    format_item = M.format_entry,
-  }, function(choice)
-    if choice then
-      M.open_dialogue(choice)
+  M.entries(project_dir, function(entries)
+    if #entries == 0 then
+      notify(
+        "в проекте нет сессий с доступными транскриптами"
+      )
+      return
     end
+    vim.ui.select(entries, {
+      prompt = "Сессии проекта",
+      format_item = M.format_entry,
+    }, function(choice)
+      if choice then
+        M.open_dialogue(choice)
+      end
+    end)
   end)
 end
 

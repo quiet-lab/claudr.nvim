@@ -159,16 +159,18 @@ function M.continue(session_id, opts)
     return
   end
   local topic = topic_mod.load(record)
-  topic_mod.restore(topic)
   local function send(text)
     show(topic, { focus = window.topic_of() == topic.id })
     topic_mod.submit(topic, text)
   end
-  if opts.question then
-    send(opts.question)
-  else
-    input("Вопрос в теме: ", send)
-  end
+  -- вопрос уходит после чтения прежних реплик: новый вопрос встаёт после них
+  topic_mod.restore(topic, function()
+    if opts.question then
+      send(opts.question)
+    else
+      input("Вопрос в теме: ", send)
+    end
+  end)
   return topic
 end
 

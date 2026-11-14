@@ -198,40 +198,79 @@ function M.load(record)
   return topic
 end
 
---- Заполняет тему из транскрипта её сессии, не запуская процесс. Транскрипта нет — тема
---- помечается «содержимое недоступно».
+--- Заполняет тему из транскрипта её сессии, не запуская процесс. Транскрипт читается
+--- асинхронно порциями; окно темы перерисовывается после первой порции и по концу чтения,
+--- `on_done()` вызывается по концу чтения (сразу, если читать нечего). Транскрипта нет —
+--- тема помечается «содержимое недоступно». Повторный вызов во время чтения ждёт его конца.
 ---@param topic claudr.Topic
-function M.restore(topic)
+---@param on_done fun()|nil
+function M.restore(topic, on_done)
+  if topic.restoring then
+    topic.restoring[#topic.restoring + 1] = on_done
+    return
+  end
+  local function done()
+    if on_done then
+      on_done()
+    end
+  end
   if topic.proc or #topic.entries > 0 then
+    done()
     return
   end
   local path = M.transcript(topic.id)
   local data = data_module()
-  local replies = path and data and data.read_dialogue and data.read_dialogue(path)
-  if not replies then
+  if not (path and data and data.read_dialogue) then
     topic.unavailable = true
     changed(topic)
+    done()
     return
   end
   topic.unavailable = false
   topic.has_session = true
+  topic.restoring = { on_done }
   local context = require("claudr.questions.context")
   local entry
-  for _, r in ipairs(replies) do
-    if r.role == "user" then
-      entry = {
-        question = context.strip(r.text or ""),
-        prompt = r.text or "",
-        answer = "",
-        status = "done",
-      }
-      topic.entries[#topic.entries + 1] = entry
-    elseif r.role == "assistant" and entry then
-      local text = r.text or ""
-      entry.answer = entry.answer == "" and text or (entry.answer .. "\n\n" .. text)
+  local rendered = false
+  local function finish()
+    local waiters = topic.restoring or {}
+    topic.restoring = nil
+    changed(topic)
+    for _, cb in ipairs(waiters) do
+      if cb then
+        cb()
+      end
     end
   end
-  changed(topic)
+  data.read_dialogue(path, function(replies)
+    for _, r in ipairs(replies) do
+      if r.role == "user" then
+        entry = {
+          question = context.strip(r.text or ""),
+          prompt = r.text or "",
+          answer = "",
+          status = "done",
+        }
+        topic.entries[#topic.entries + 1] = entry
+      elseif r.role == "assistant" and entry then
+        local text = r.text or ""
+        entry.answer = entry.answer == "" and text or (entry.answer .. "\n\n" .. text)
+      end
+    end
+    if not rendered then
+      rendered = true
+      changed(topic)
+    end
+  end, function(found)
+    if not found then
+      topic.unavailable = true
+      topic.has_session = false
+    end
+    finish()
+  end, function()
+    -- тема выгружена из памяти: чтение прекращается
+    return topics[topic.id] ~= topic
+  end)
 end
 
 local start

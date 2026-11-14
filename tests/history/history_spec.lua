@@ -45,6 +45,32 @@ after_each(function()
   end
 end)
 
+-- Ожидание `n`-го показа перечня (перечень строится асинхронно).
+local function await_select(n)
+  t.wait(function()
+    return #selects >= n
+  end, "перечень сессий №" .. n)
+end
+
+-- Перечень сессий каталога с ожиданием конца чтения.
+local function entries_of(dir)
+  local out
+  history.entries(dir, function(list)
+    out = list
+  end)
+  t.wait(function()
+    return out ~= nil
+  end, "перечень сессий")
+  return out
+end
+
+-- Диалог в текущем окне прочитан до конца.
+local function await_loaded(buf)
+  t.wait(function()
+    return vim.b[buf].claudr_loaded == true
+  end, "конец чтения диалога")
+end
+
 local function note_text()
   return table.concat(
     vim.tbl_map(function(n)
@@ -59,6 +85,7 @@ describe("Перечень сессий проекта инстанса", functi
     u.fresh("history-project")
     stub_select()
     history.show_for_session(alpha[1])
+    await_select(1)
     t.eq(#selects, 1)
     local lines = selects[1].lines
     t.eq(
@@ -93,7 +120,7 @@ describe("Перечень сессий проекта инстанса", functi
       "history-project"
     )
     t.ok(d, "двойник запущен")
-    local entries = history.entries(require("claudr.data").project_dir(alpha[1]))
+    local entries = entries_of(require("claudr.data").project_dir(alpha[1]))
     local running = {}
     for _, e in ipairs(entries) do
       running[e.id] = e.running
@@ -124,7 +151,7 @@ describe(
         mode = "ask",
       })
       local ids = {}
-      for _, e in ipairs(history.entries(dir)) do
+      for _, e in ipairs(entries_of(dir)) do
         ids[e.id] = true
       end
       t.ok(
@@ -145,9 +172,9 @@ describe("Срок хранения транскриптов", function()
   it("Старый транскрипт удалён Claude Code", function()
     u.fresh("history-project")
     local dir = require("claudr.data").project_dir(alpha[1])
-    t.eq(#history.entries(dir), 3)
+    t.eq(#entries_of(dir), 3)
     t.eq(vim.fn.delete(dir .. "/" .. alpha[2] .. ".jsonl"), 0)
-    local entries = history.entries(dir)
+    local entries = entries_of(dir)
     t.eq(#entries, 2)
     for _, e in ipairs(entries) do
       t.ok(e.id ~= alpha[2], "удалённая сессия не показана")
@@ -166,7 +193,11 @@ describe("Просмотр диалога", function()
       end
     end)
     history.show_for_session(alpha[3])
+    t.wait(function()
+      return vim.api.nvim_buf_get_name(0) == history.BUF_PREFIX .. alpha[1]
+    end, "окно диалога")
     local buf = vim.api.nvim_get_current_buf()
+    await_loaded(buf)
     t.eq(vim.api.nvim_buf_get_name(buf), history.BUF_PREFIX .. alpha[1])
     local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
     local order = {
@@ -204,6 +235,9 @@ describe("Просмотр диалога", function()
     end)
     local before = vim.api.nvim_get_current_buf()
     history.show_project(dir)
+    t.wait(function()
+      return #notes > 0
+    end, "сообщение о недоступности")
     t.match(note_text(), "недоступен")
     t.eq(vim.api.nvim_get_current_buf(), before, "диалог не открыт")
   end)
@@ -216,6 +250,7 @@ describe("Источник — файлы Claude Code", function()
     hsupport.wait_status(herdr, "no_server")
     stub_select()
     history.show_for_session(alpha[1])
+    await_select(1)
     t.eq(#selects, 1, "перечень доступен")
     t.eq(#selects[1].list, 3)
     for _, line in ipairs(selects[1].lines) do
@@ -247,6 +282,7 @@ describe("Вызов: действие дерева и подкоманда", fu
       t.ok(view.action("history"), "действие зарегистрировано")
       t.eq(view.action("history").key, history.KEY)
       vim.api.nvim_feedkeys(history.KEY, "x", false)
+      await_select(1)
       t.eq(#selects, 1)
       t.eq(#selects[1].list, 3)
       t.match(table.concat(selects[1].lines, "\n"), "●")
@@ -283,8 +319,10 @@ describe("Вызов: действие дерева и подкоманда", fu
       )
       stub_select()
       vim.cmd("Claudr history w1:p1")
+      await_select(1)
       t.eq(#selects, 1)
       vim.cmd("Claudr history " .. alpha[3])
+      await_select(2)
       t.eq(#selects, 2)
       vim.cmd("Claudr history " .. fixtures.missing_session_id)
       t.eq(#selects, 2)
@@ -307,6 +345,7 @@ describe("Вызов: действие дерева и подкоманда", fu
         return list[1]
       end)
       vim.cmd("Claudr history")
+      await_select(2)
       t.eq(
         #selects,
         2,
