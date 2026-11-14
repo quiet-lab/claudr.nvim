@@ -124,16 +124,16 @@ local function question_screen(ctx)
     end
     screen.footer =
       { "Enter отмечает пункт, c подтверждает отмеченные." }
-  else
-    items[#items + 1] = {
-      text = "свой ответ",
-      run = function()
-        ctx.ask("Свой ответ", "answer/" .. qi, function(text)
-          return record(ctx, q, text)
-        end)
-      end,
-    }
   end
+  -- свой ответ есть и у множественного выбора: текст заменяет отметки как есть
+  items[#items + 1] = {
+    text = "свой ответ",
+    run = function()
+      ctx.ask("Свой ответ", "answer/" .. qi, function(text)
+        return record(ctx, q, text)
+      end)
+    end,
+  }
   vim.list_extend(items, common.deny_items(ctx))
   return screen
 end

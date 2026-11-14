@@ -106,6 +106,46 @@ describe("Множественный выбор", function()
   end)
 end)
 
+describe("Свой ответ в множественном выборе", function()
+  it("Свой ответ в множественном выборе", function()
+    local req = open("question-multi")
+    ds.choose("%[ %] Cheese")
+    t.ok(
+      ds.line_of("свой ответ") > ds.line_of("Olives"),
+      "пункт после перечня пунктов"
+    )
+    ds.choose("свой ответ")
+    local win = input_win(req, "answer/1")
+    t.ok(win, "окно ввода открыто")
+    ds.ms.set_text(win.buf, "Cheese, no olives")
+    ds.ms.write(win.buf)
+    t.eq(#pending.decided, 1)
+    t.eq(answers(), { ["Which toppings?"] = "Cheese, no olives" })
+  end)
+
+  it(
+    "свой ответ на втором вопросе из двух заменяет отметки",
+    function()
+      local req = open("question-two")
+      ds.choose("3%. Blue")
+      ds.choose("%[ %] Cheese")
+      ds.choose("свой ответ")
+      local win = input_win(req, "answer/2")
+      ds.ms.set_text(win.buf, "only bread")
+      ds.ms.write(win.buf)
+      t.eq(#pending.decided, 0, "до итогового экрана решения нет")
+      if vim.api.nvim_get_current_buf() ~= buffer.current().buf then
+        vim.api.nvim_set_current_win(buffer.current().win)
+      end
+      t.match(ds.text(), "Ответы на все вопросы")
+      ds.choose("подтвердить ответы")
+      local a = answers()
+      t.eq(a["Which toppings?"], "only bread")
+      t.eq(a["Which color?"], "Blue")
+    end
+  )
+end)
+
 describe("Несколько вопросов", function()
   it("Два вопроса", function()
     open("question-two")

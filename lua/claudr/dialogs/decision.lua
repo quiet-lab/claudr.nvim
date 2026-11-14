@@ -7,6 +7,7 @@
 -- | разрешение, пункт элемента        | allow + updatedPermissions: элемент как есть   |
 -- | вопрос, ответ                     | allow + updatedInput: questions и answers      |
 -- | план, «подтвердить»               | allow + updatedInput: исходный tool_input      |
+-- | вопрос, множественный выбор      | метка с запятой — в двойных кавычках           |
 -- | любой вид, «отказать»             | deny                                           |
 -- | любой вид, «отказать с пояснением»| deny + message                                 |
 -- | любой вид, «отказать и прервать»  | deny + interrupt = true                        |
@@ -64,9 +65,14 @@ function M.deny_interrupt()
 end
 
 --- Значение ответа множественного выбора: метки отмеченных пунктов (в порядке пунктов,
---- порядок задаёт вызывающий) через запятую с пробелом.
+--- порядок задаёт вызывающий) через запятую с пробелом; метка с запятой берётся в двойные
+--- кавычки, как отвечает панель Claude Code (`"Cheese, aged", Olives`).
 function M.multi_value(labels)
-  return table.concat(labels, ", ")
+  local out = {}
+  for i, label in ipairs(labels) do
+    out[i] = label:find(",", 1, true) and ('"' .. label .. '"') or label
+  end
+  return table.concat(out, ", ")
 end
 
 return M

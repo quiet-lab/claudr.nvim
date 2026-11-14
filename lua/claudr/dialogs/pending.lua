@@ -11,7 +11,7 @@
 --   answered_other     хук прислал «отвечено»: победило решение другого экземпляра;
 --   handed_off         диалог передан терминалу, соединение закрыто без решения.
 -- Запросы во всех состояниях остаются в `list()` до `forget`; в `for_node` и `count` входят
--- только `waiting` и `sent`.
+-- только `waiting` и `sent` с живым соединением хука.
 --
 -- Привязка к узлу дерева: панель — `HERDR_PANE_ID` окружения хука, субагент — `agent_id` входа
 -- (узел `<панель>/<agent_id>`, если он есть в дереве, иначе узел панели). Таймеров и опроса
@@ -23,6 +23,13 @@ local socket = require("claudr.dialogs.socket")
 local M = {}
 
 local ACTIVE = { waiting = true, sent = true }
+
+-- Ждущий запрос: `waiting` либо `sent`, чей хук ещё держит соединение. Хук, напечатавший
+-- решение и завершившийся (`hook_closed`), запрос не ждёт: он остаётся в `list()` до
+-- подтверждения в транскрипте, но в счёт и выбор запросов не входит.
+local function counted(req)
+  return req.state == "waiting" or (req.state == "sent" and not req.hook_closed)
+end
 
 local S = {
   seq = 0,
@@ -92,9 +99,12 @@ local function on_close(req)
   S.conns[req] = nil
   if req.state == "waiting" then
     finish(req, "closed_by_hook")
+  elseif req.state == "sent" then
+    -- после отправленного решения хук печатает его и завершается: запрос ждёт подтверждения
+    -- в транскрипте, но ждущим уже не считается
+    req.hook_closed = true
+    emit(req, "state")
   end
-  -- после отправленного решения хук печатает его и завершается: запрос ждёт подтверждения
-  -- в транскрипте
 end
 
 local function on_request(conn, frame)
@@ -186,7 +196,7 @@ end
 function M.for_pane(pane_id)
   local out = {}
   for _, req in ipairs(S.reqs) do
-    if ACTIVE[req.state] and req.pane_id == pane_id then
+    if counted(req) and req.pane_id == pane_id then
       out[#out + 1] = req
     end
   end
@@ -206,7 +216,7 @@ function M.for_node(node)
   if node.kind == "subagent" and node.owner_pane and node.data then
     for _, req in ipairs(S.reqs) do
       if
-        ACTIVE[req.state]
+        counted(req)
         and req.pane_id == node.owner_pane
         and req.agent_id ~= nil
         and req.agent_id == node.data.id

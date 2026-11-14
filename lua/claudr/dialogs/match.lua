@@ -95,7 +95,7 @@ function W:assign()
           not use.owner
           and use.name == req.tool_name
           and (not use.result_idx or use.result_idx > t.since)
-          and hook.equal_input(use.input, req.tool_input)
+          and hook.same_call(req.tool_name, use.input, req.tool_input)
         then
           use.owner = req
           t.use = use

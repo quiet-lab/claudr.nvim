@@ -201,4 +201,17 @@ function M.equal_input(a, b)
   return vim.deep_equal(a, b)
 end
 
+--- Равенство входа запроса и входа вызова в транскрипте для одного инструмента. У `ExitPlanMode`
+--- Claude Code подставляет во вход хука текст плана из файла, а запись `tool_use` хранит то, что
+--- прислала модель, поэтому поле `plan` не сравнивается (остальные, в том числе `planFilePath`,
+--- — по значению); у прочих инструментов — `equal_input`.
+function M.same_call(tool_name, a, b)
+  if tool_name == "ExitPlanMode" and type(a) == "table" and type(b) == "table" then
+    local x, y = vim.deepcopy(a), vim.deepcopy(b)
+    x.plan, y.plan = nil, nil
+    return vim.deep_equal(x, y)
+  end
+  return M.equal_input(a, b)
+end
+
 return M

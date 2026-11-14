@@ -176,3 +176,34 @@ describe("Состояния буфера на настоящем перечне
     package.loaded["claudr.view"] = nil
   end)
 end)
+
+describe("Решение отправлено, хук завершился", function()
+  it("Решение отправлено, хук завершился", function()
+    s.env({ records = s.records("bash-pending") })
+    local h, req = s.request(s.input("permission-bash"))
+    s.wait_id(req)
+    local pending = require("claudr.dialogs.pending")
+    local node = model.get(s.PANE)
+    open_dialog()
+    ds.choose("1%. разрешить один раз")
+    decision_of(h)
+    t.eq(req.state, "sent")
+    t.eq(
+      pending.count(node),
+      1,
+      "пока хук держит соединение, запрос ждущий"
+    )
+    h:close()
+    t.wait(function()
+      return req.hook_closed == true
+    end, "хук закрыл соединение")
+    t.eq(pending.count(node), 0)
+    t.eq(pending.for_node(node), {})
+    t.eq(pending.list(), { req })
+    t.match(ds.text(), "решение отправлено")
+    -- подтверждение по вложению
+    s.append(s.transcript(), { s.decision_record(s.samples.tool_use_ids.bash) })
+    s.wait_state(req, "accepted")
+    t.match(ds.text(), "принят")
+  end)
+end)

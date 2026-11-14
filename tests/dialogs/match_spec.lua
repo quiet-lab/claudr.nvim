@@ -238,3 +238,35 @@ describe("События транскрипта в claude-code-data", function()
     end
   )
 end)
+
+describe("План правится в том же сообщении", function()
+  it("План правится в том же сообщении", function()
+    s.env({ records = {} })
+    local input = s.input("plan")
+    local _, req = s.request(input)
+    local edited = vim.deepcopy(input.tool_input)
+    edited.plan = "# Plan: other text written by the model\n"
+    s.append(
+      s.transcript(),
+      { s.uses_record({ { id = ids.plan, name = "ExitPlanMode", input = edited } }) }
+    )
+    t.eq(s.wait_id(req), ids.plan)
+    -- результат вызова закрывает запрос
+    s.append(s.transcript(), { s.result_record(ids.plan, false) })
+    s.wait_state(req, "answered_elsewhere")
+  end)
+
+  it("другой planFilePath вызов не назначает", function()
+    s.env({ records = {} })
+    local input = s.input("plan")
+    local _, req = s.request(input)
+    local other = vim.deepcopy(input.tool_input)
+    other.planFilePath = other.planFilePath .. ".other"
+    s.append(
+      s.transcript(),
+      { s.uses_record({ { id = ids.plan, name = "ExitPlanMode", input = other } }) }
+    )
+    s.settle()
+    t.eq(req.tool_use_id, nil)
+  end)
+end)

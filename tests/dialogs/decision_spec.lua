@@ -82,9 +82,13 @@ describe("Множественный выбор", function()
     t.eq(out, s.output("answer-multi"))
   end)
 
-  it("Одна отметка и метка с запятой", function()
+  it("Одна отметка", function()
     t.eq(decision.multi_value({ "Ham" }), "Ham")
-    t.eq(decision.multi_value({ "a, b", "c" }), "a, b, c")
+  end)
+
+  it("Метка с запятой", function()
+    t.eq(decision.multi_value({ "Cheese, aged", "Olives" }), '"Cheese, aged", Olives')
+    t.eq(decision.multi_value({ "Ham", "a,b" }), 'Ham, "a,b"')
   end)
 end)
 
