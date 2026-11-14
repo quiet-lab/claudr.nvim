@@ -108,6 +108,11 @@ end
 function M.start()
   M.stop()
   unsub_model = model.subscribe(on_model)
+  -- Прежние состояния панелей — из текущей модели: переход в `blocked` распознаётся и тогда,
+  -- когда до него модель не уведомляла подписчиков (без прежнего состояния переход
+  -- не отличить от панели, уже бывшей в `blocked`). Сообщений здесь нет: прежних состояний
+  -- ещё нет ни у одной панели.
+  on_model()
   local p = pending()
   if p then
     unsub_pending = p.subscribe(on_pending)
