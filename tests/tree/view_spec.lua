@@ -48,7 +48,7 @@ describe("Открытие дерева", function()
     t.eq(vim.bo[buf].filetype, "claudr-tree")
     wait_line("🔧 Wait for background sleep command output")
     local lines = view.lines()
-    t.eq(lines[1], "▾ 📁 ws1")
+    t.eq(lines[1], "▾ S ws1")
     t.eq(lines[2], "  ▾ main")
     t.eq(lines[3], "    ▾ opus задача w1:p1")
     t.eq(

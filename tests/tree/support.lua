@@ -56,14 +56,9 @@ function M.stub_icons(icons)
   return stub
 end
 
--- Модуля значков в ветви может ещё не быть (он пишется отдельно): тестам, которые открывают
--- дерево, подставляется заглушка; при наличии модуля используется он.
-if
-  not package.loaded["claudr.herdr.icons"]
-  and not package.searchpath("claudr.herdr.icons", package.path)
-then
-  M.stub_icons()
-end
+-- Тесты дерева идут на синтетических значках: разбор конфигурации herdr проверяют
+-- тесты `tests/herdr/icons_spec.lua`.
+M.stub_icons()
 
 --- Записывающая фабрика таймера кадров: `timers` — созданные таймеры с журналом `calls`
 --- (`start`, `stop`, `close`). `active()` — есть ли заведённый и не закрытый таймер.

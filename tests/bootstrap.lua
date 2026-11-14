@@ -36,6 +36,7 @@ vim.uv.os_setenv("TMPDIR", tmpdir)
 
 for _, name in ipairs({
   "HERDR_SOCKET_PATH",
+  "HERDR_CONFIG_PATH",
   "HERDR_PANE_ID",
   "HERDR_WORKSPACE_ID",
   "HERDR_TAB_ID",
