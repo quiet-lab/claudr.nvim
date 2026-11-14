@@ -1,7 +1,10 @@
 -- Реестр тем вопросов по коду: файл JSON в каталоге состояния Neovim.
 -- Запись темы: session_id, project_dir, title, mode, file, symbol, created_at, last_used_at
--- (время — секунды Unix с долями секунды). Файл читается при каждом обращении и переписывается целиком
--- после изменения, поэтому реестр переживает перезапуск Neovim и общий для всех экземпляров.
+-- (время — секунды Unix с долями секунды). Файл читается при каждом обращении; перед каждой
+-- записью реестр перечитывается и меняется только запись своей сессии (слияние по
+-- идентификатору), а сама запись идёт через временный файл с уникальным именем в том же
+-- каталоге и переименование, поэтому реестр переживает перезапуск Neovim и общий для всех
+-- экземпляров, а читающий не видит наполовину записанного файла.
 local M = {}
 
 local FIELDS =
@@ -33,14 +36,36 @@ local function read_all()
   return decoded.topics
 end
 
+local tmp_counter = 0
+
+--- Записывает реестр целиком: временный файл рядом с реестром (имя уникально для процесса и
+--- вызова, чужая запись его не затирает) и переименование. При ошибке временный файл удаляется.
 local function write_all(topics)
   local path = M.path()
   vim.fn.mkdir(vim.fs.dirname(path), "p")
-  local tmp = path .. ".tmp"
-  local f = assert(io.open(tmp, "w"))
-  f:write(vim.json.encode({ version = 1, topics = topics }))
-  f:close()
-  assert(vim.uv.fs_rename(tmp, path))
+  tmp_counter = tmp_counter + 1
+  local tmp = ("%s.%d.%d.tmp"):format(path, vim.uv.os_getpid(), tmp_counter)
+  local ok, err = pcall(function()
+    local f = assert(io.open(tmp, "w"))
+    local wrote, werr = f:write(vim.json.encode({ version = 1, topics = topics }))
+    f:close()
+    assert(wrote, werr)
+    assert(vim.uv.fs_rename(tmp, path))
+  end)
+  if not ok then
+    vim.uv.fs_unlink(tmp)
+    error(err, 0)
+  end
+end
+
+--- Перечитывает реестр, применяет `change(topics)` к свежему содержимому и записывает.
+--- Чужие записи, появившиеся после прошлого чтения, сохраняются; `change` вернул `false` —
+--- записи нет.
+local function modify(change)
+  local topics = read_all()
+  if change(topics) ~= false then
+    write_all(topics)
+  end
 end
 
 local function copy(rec)
@@ -59,13 +84,13 @@ function M.create(rec)
     rec.session_id and rec.project_dir,
     "registry.create: нужны session_id и project_dir"
   )
-  local topics = read_all()
   local now = M.now()
   local out = copy(rec)
   out.created_at = out.created_at or now
   out.last_used_at = out.last_used_at or out.created_at
-  topics[out.session_id] = out
-  write_all(topics)
+  modify(function(topics)
+    topics[out.session_id] = out
+  end)
   return copy(out)
 end
 
@@ -77,14 +102,16 @@ end
 
 --- Обновляет время последнего обращения к теме.
 function M.touch(session_id, time)
-  local topics = read_all()
-  local rec = topics[session_id]
-  if not rec then
-    return nil
-  end
-  rec.last_used_at = time or M.now()
-  write_all(topics)
-  return copy(rec)
+  local out
+  modify(function(topics)
+    local rec = topics[session_id]
+    if not rec then
+      return false
+    end
+    rec.last_used_at = time or M.now()
+    out = copy(rec)
+  end)
+  return out
 end
 
 --- Записи тем проекта (без аргумента — всех проектов), новые обращения первыми.
