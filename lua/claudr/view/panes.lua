@@ -28,7 +28,7 @@ end
 --- Строка перечня для панели.
 function M.line(pane)
   local icon = tree_view.ICONS[pane.pane_kind] or "?"
-  local text = icon .. " " .. (pane.label ~= "" and pane.label or pane.id)
+  local text = icon .. " " .. tree_view.one_line(pane.label ~= "" and pane.label or pane.id)
   local state = tree_view.state_text(pane)
   if state then
     text = text .. " [" .. state .. "]"

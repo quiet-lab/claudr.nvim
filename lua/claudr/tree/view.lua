@@ -119,6 +119,14 @@ function M.state_text(node)
   return nil
 end
 
+--- Текст в одну строку: управляющие символы и переводы строк (в заголовках терминала,
+--- командах, описаниях) заменяются пробелом, подряд идущие сливаются. Модель хранит
+--- исходное значение; буфер Neovim принимает только строки без перевода строки.
+function M.one_line(text)
+  local out = tostring(text):gsub("[%c\127]+", " ")
+  return out
+end
+
 local function icon(node)
   if node.kind == "pane" then
     return M.ICONS[node.pane_kind] or "?"
@@ -146,6 +154,7 @@ local function compose()
     if st.message and st.message ~= "" then
       text = text .. " (" .. st.message .. ")"
     end
+    text = M.one_line(text)
     lines[#lines + 1] = text
     marks[#marks + 1] = { #lines, 0, #text, HL.header }
   end
@@ -158,7 +167,12 @@ local function compose()
     if #kids > 0 then
       fold = S.collapsed[node.id] and "▸" or "▾"
     end
-    local line = string.rep("  ", depth) .. fold .. " " .. icon(node) .. " " .. node.label
+    local line = string.rep("  ", depth)
+      .. fold
+      .. " "
+      .. icon(node)
+      .. " "
+      .. M.one_line(node.label)
     local state = M.state_text(node)
     if state then
       local start = #line + 1

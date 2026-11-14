@@ -183,3 +183,34 @@ describe("Клавиши и действия", function()
     t.ok(view.buf(), "буфер остаётся")
   end)
 end)
+
+describe("Подписи узлов", function()
+  it(
+    "переводы строк и управляющие символы в подписях заменяются пробелом",
+    function()
+      s.env(
+        s.snapshot({
+          double.pane({
+            pane_id = "w1:p1",
+            foreground_process = "tool\nsecond line",
+            cwd = "/src\r\n/dir\t\27[0m",
+          }),
+          double.pane({ pane_id = "w1:p2", agent = "codex", terminal_title = "one\ntwo\n\nthree" }),
+        }),
+        "subagent-command"
+      )
+      view.open()
+      wait_line("tool second line")
+      for _, line in ipairs(view.lines()) do
+        t.eq(
+          line:find("[%c]"),
+          nil,
+          "строка без управляющих символов: " .. vim.inspect(line)
+        )
+      end
+      t.eq(view.one_line("a\n\n b\27c"), "a  b c")
+      -- модель хранит исходное значение
+      t.match(model.get("w1:p1").label, "tool\nsecond line")
+    end
+  )
+end)
