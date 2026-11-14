@@ -1,0 +1,12 @@
+{
+  "name": "claudr",
+  "owner": { "name": "quiet-lab" },
+  "description": "Плагин Claude Code для claudr.nvim",
+  "plugins": [
+    {
+      "name": "claudr",
+      "source": "./claude-plugin",
+      "description": "Хук PermissionRequest: ответ на диалоги Claude Code из Neovim"
+    }
+  ]
+}

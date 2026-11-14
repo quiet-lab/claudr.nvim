@@ -1,0 +1,23 @@
+{
+  "description": "Запрос разрешения, вопрос и план передаются Neovim с плагином claudr.nvim; без Neovim диалог остаётся в терминале",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env",
+            "args": [
+              "NVIM_LOG_FILE=/dev/null",
+              "nvim",
+              "--clean",
+              "-l",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/permission-request.lua"
+            ],
+            "timeout": 86400
+          }
+        ]
+      }
+    ]
+  }
+}
