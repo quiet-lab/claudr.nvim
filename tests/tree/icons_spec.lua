@@ -91,7 +91,8 @@ describe("Значки узлов", function()
     -- панель без детей под workspace (единственная вкладка схлопнута): отступ, место знака
     -- свёртки и пробел
     t.eq(ic.col, #"    ", "значок в начале строки узла")
-    t.eq(line("w1:p1"), "    opus задача w1:p1")
+    -- знак панели с агентом — символ workspace, как в строке агента herdr
+    t.eq(line("w1:p1"), "    S opus задача w1:p1")
     t.eq(
       line("w1:p1"):find(" A ", 1, true),
       nil,
@@ -132,7 +133,7 @@ describe("Значки узлов", function()
   end)
 
   it(
-    "панель с командой — знак $ без значка состояния",
+    "панель с командой — знак 💻 без значка состояния",
     function()
       s.env(s.snapshot({
         double.pane({ pane_id = "w1:p1", foreground_process = "cargo", cwd = "/src" }),
@@ -140,7 +141,26 @@ describe("Значки узлов", function()
       view.open()
       wait_line("w1:p1")
       t.eq(view._icon("w1:p1"), nil)
-      t.eq(line("w1:p1"), "    $ cargo /src")
+      t.eq(line("w1:p1"), "    💻 cargo /src")
+    end
+  )
+
+  it(
+    "панель с агентом в workspace без символа — знак 🧠",
+    function()
+      s.env({
+        workspaces = { ws({ workspace_id = "w1", label = "demo", tokens = false }) },
+        tabs = { double.tab({ tab_id = "w1:t1" }) },
+        panes = { double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "idle" }) },
+      })
+      view.open()
+      wait_line("w1:p1")
+      t.match(line("w1:p1"), "^    🧠 ")
+      t.eq(
+        view._icon("w1:p1").col,
+        #"    ",
+        "знак вида сразу после значка состояния"
+      )
     end
   )
 
@@ -208,8 +228,9 @@ describe("Подписи workspace и вкладок", function()
     wait_line("w1:p2")
     t.match(line("w1"), "^▾ S1 demo$")
     -- единственная вкладка своей строки не имеет: окраска проверена по модели
+    -- у панели с агентом подпись идёт после знака вида (символа workspace)
     for _, id in ipairs({ "w1", "w1:p1" }) do
-      local col = #line(id):match("^[%s▾▸]* ")
+      local col = #line(id):match(id == "w1:p1" and "^[%s▾▸]* S1 " or "^[%s▾▸]* ")
       local group = hl_at(id, col)
       t.ok(group, "подпись окрашена: " .. id)
       t.eq(hl_fg(group), "#336699")

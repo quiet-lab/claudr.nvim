@@ -91,11 +91,14 @@ M.ICON_HL = {
   unknown = "Comment",
 }
 
--- Знаки вида узлов без образца в herdr (решение D41): эмодзи без U+FE0F.
+-- Знаки вида узлов (решения D41, D49): эмодзи без U+FE0F. Панель с агентом получает символ
+-- своего workspace, как строка агента в herdr; `agent` — знак панели с агентом в workspace
+-- без символа. Остальных узлов herdr не показывает.
 M.KIND_SIGN = {
+  agent = "🧠",
   subagent = "🤖",
   task = "🔧",
-  command = "$",
+  command = "💻",
 }
 
 local function mode()
@@ -368,7 +371,11 @@ local function herdr_line(node, prefix, row, marks, icons)
   end
   local sign
   if node.kind == "pane" then
-    sign = node.pane_kind == "command" and M.KIND_SIGN.command or nil
+    if node.pane_kind == "command" then
+      sign = M.KIND_SIGN.command
+    else
+      sign = node.symbol or M.KIND_SIGN.agent
+    end
   else
     sign = M.KIND_SIGN[node.kind]
   end

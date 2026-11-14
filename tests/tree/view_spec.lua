@@ -50,13 +50,13 @@ describe("Открытие дерева", function()
     local lines = view.lines()
     -- единственная вкладка схлопнута: панели прямо под workspace
     t.eq(lines[1], "▾ S ws1")
-    t.eq(lines[2], "  ▾ opus задача w1:p1")
+    t.eq(lines[2], "  ▾ S opus задача w1:p1")
     t.eq(
       lines[3],
       "    ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
     )
     t.eq(lines[4], "        🔧 Wait for background sleep command output")
-    t.eq(lines[#lines], "    $ cargo /src")
+    t.eq(lines[#lines], "    💻 cargo /src")
     -- повторный вызов не открывает второе окно
     local wins = #vim.api.nvim_tabpage_list_wins(0)
     vim.cmd("wincmd p")
@@ -136,7 +136,7 @@ describe("Клавиши и действия", function()
     t.ok(view.focus("w1:p1"))
     press("<Tab>")
     t.ok(not has_line("outer"), "дети свёрнуты")
-    t.match(view.lines()[view.line_of("w1:p1")], "▸ opus")
+    t.match(view.lines()[view.line_of("w1:p1")], "▸ S opus")
     press("za")
     t.ok(has_line("outer"))
   end)

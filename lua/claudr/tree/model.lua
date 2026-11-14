@@ -6,8 +6,8 @@
 -- при каждом уведомлении модуля данных; список событий herdr нужен только для `pane_exited`,
 -- которого в снимке нет. Таймеров и опроса нет.
 --
--- Узел: `{ id, kind, pane_kind, label, text_label, state, icon, color, parent, children,
--- data, owner_pane }`:
+-- Узел: `{ id, kind, pane_kind, label, text_label, state, icon, symbol, color, parent,
+-- children, data, owner_pane }`:
 --   kind       "workspace" | "tab" | "pane" | "subagent" | "task";
 --   pane_kind  у панели — "agent" | "command", у остальных nil;
 --   label      подпись без состояния; у workspace — «<символ> <label>» по токену `symbol`;
@@ -17,6 +17,7 @@
 --   icon       состояние значка: "idle" | "working" | "blocked" | "done" | "unknown" или
 --              неизвестное значение `agent_status` как есть; nil — значка состояния нет
 --              (панель с командой, нет `agent_status`). Кадры выбирает отображение;
+--   symbol     у панели с агентом — символ её workspace (токен `symbol`), иначе nil;
 --   color      цвет подписи `#RRGGBB` из токена `color` workspace у workspace, его вкладок и
 --              панелей с агентом, иначе nil;
 --   parent     идентификатор родителя или nil; children — идентификаторы детей по порядку;
@@ -486,6 +487,11 @@ local function build(snap)
     local w = present(ws_id) and ws_by_id[ws_id]
     return w and M.color(tokens_of(w).color) or nil
   end
+  -- символ workspace записи (знак панели с агентом)
+  local function symbol_of(ws_id)
+    local w = present(ws_id) and ws_by_id[ws_id]
+    return w and str(tokens_of(w).symbol) or nil
+  end
   local panes = sorted(snap.panes or {}, "pane_id")
   local panes_of_tab = {}
   for _, p in ipairs(panes) do
@@ -525,6 +531,7 @@ local function build(snap)
         state = kind == "agent" and str(p.agent_status) or nil,
         icon = kind == "agent" and str(p.agent_status) or nil,
         color = kind == "agent" and color_of(p.workspace_id) or nil,
+        symbol = kind == "agent" and symbol_of(p.workspace_id) or nil,
         data = p,
       }, parent)
       if not parent then
