@@ -129,25 +129,33 @@ end
 --- Считает открытые дескрипторы файлов (`vim.uv.fs_open` и `vim.uv.fs_close`) до
 --- `restore()`: `live()` — число открытых и ещё не закрытых.
 function M.count_fds()
+  -- считаются только дескрипторы, открытые после установки счётчика: закрытие дескриптора
+  -- прежнего теста, пришедшее позже, на счёт не влияет
   local c = { opened = 0, closed = 0 }
+  local mine = {}
   local orig_open, orig_close = vim.uv.fs_open, vim.uv.fs_close
   vim.uv.fs_open = function(path, flags, mode, cb)
     if not cb then
       local fd, err, name = orig_open(path, flags, mode)
       if fd then
         c.opened = c.opened + 1
+        mine[fd] = true
       end
       return fd, err, name
     end
     return orig_open(path, flags, mode, function(err, fd)
       if fd then
         c.opened = c.opened + 1
+        mine[fd] = true
       end
       return cb(err, fd)
     end)
   end
   vim.uv.fs_close = function(fd, cb)
-    c.closed = c.closed + 1
+    if mine[fd] then
+      mine[fd] = nil
+      c.closed = c.closed + 1
+    end
     return orig_close(fd, cb)
   end
   function c.live()
