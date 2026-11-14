@@ -1,12 +1,14 @@
 -- Сообщения и клавиши агентам (спецификация messaging, решение D11).
 --
--- Текст уходит методом `agent.prompt` с целью — выбранной панелью с агентом; клавиши —
+-- Текст набирается окном ввода (`claudr.input`) и уходит методом `agent.prompt` с целью — выбранной панелью с агентом; клавиши —
 -- методом `pane.send_keys`. Целью служит узел дерева (под курсором или переданный), панель,
 -- переданная идентификатором, либо панель с агентом из перечня `vim.ui.select`. Субагентам и
 -- фоновым командам писать нельзя: у них нет панели, запросов к серверу нет. Без сервера
 -- отправка завершается сообщением, ничего не откладывается. Таймеров и опроса нет.
 local commands = require("claudr.commands")
+local config = require("claudr.config")
 local herdr = require("claudr.herdr")
+local model = require("claudr.tree.model")
 
 local M = {}
 
@@ -195,29 +197,82 @@ function M.send_keys(opts)
   end)
 end
 
--- Агент ждёт ответа: причина и предложение отправить клавиши.
-local function offer_keys(pane_id, title, opts)
+-- Агент ждёт ответа на диалог: открыть буфер диалога, если у панели есть ждущий запрос
+-- (модуль `claudr.dialogs`), иначе сообщить причину и предложить подключение с вводом.
+-- Текст остаётся черновиком окна ввода и иным способом не уходит.
+local function on_blocked(pane_id, title)
+  local ok, dialogs = pcall(require, "claudr.dialogs")
+  if ok and type(dialogs) == "table" and dialogs.has_pending(pane_id) then
+    notify(
+      ("claudr: агент %s ждёт ответа на диалог; текст сохранён как черновик"):format(
+        title
+      ),
+      vim.log.levels.WARN
+    )
+    dialogs.open_for_pane(pane_id)
+    return
+  end
   notify(
     (
       "claudr: агент %s ждёт ответа на диалог или разрешение (состояние blocked); "
-      .. "сообщение не отправлено"
+      .. "сообщение не отправлено, текст сохранён как черновик"
     ):format(title),
     vim.log.levels.WARN
   )
-  vim.ui.select({ "Отправить клавиши", "Отмена" }, {
+  vim.ui.select({ "Подключиться с вводом", "Отмена" }, {
     prompt = "Агент ждёт ответа:",
   }, function(choice)
-    if choice == "Отправить клавиши" then
-      ask_keys(pane_id, title, { on_done = opts.on_done })
+    if choice == "Подключиться с вводом" then
+      local node = model.get(pane_id)
+      if node then
+        require("claudr.view").attach(node)
+      end
     end
   end)
 end
 
-local function request_prompt(pane_id, title, text, opts)
+-- Начало с «/» или «!» (решение D31): предупреждение; при включённой защите — ведущий пробел.
+local function guard(text)
+  local first = text:sub(1, 1)
+  if first ~= "/" and first ~= "!" then
+    return text
+  end
+  if config.get().message_input.guard_commands then
+    notify(
+      (
+        "claudr: текст начинается с «%s»: добавлен ведущий пробел, Claude Code "
+        .. "примет его как обычное сообщение"
+      ):format(first)
+    )
+    return " " .. text
+  end
+  local what = first == "/" and "команду" or "режим оболочки"
+  notify(
+    ("claudr: текст начинается с «%s»: Claude Code поймёт его как %s"):format(
+      first,
+      what
+    ),
+    vim.log.levels.WARN
+  )
+  return text
+end
+
+-- Один вызов `agent.prompt` с полным текстом. `ctl.close(keep_draft)` закрывает окно ввода,
+-- `ctl.release()` снимает занятость окна; без окна (`ctl == nil`) — только сообщения.
+local function request_prompt(pane_id, title, text, opts, ctl)
+  local node = model.get(pane_id)
+  local working = node ~= nil and node.state == "working"
+  text = guard(text)
   herdr.request("agent.prompt", { target = pane_id, text = text }, function(err, result)
     if err then
+      if ctl then
+        ctl.release()
+      end
       if err.code == "agent_blocked" then
-        offer_keys(pane_id, title, opts)
+        if ctl then
+          ctl.close(true)
+        end
+        on_blocked(pane_id, title)
       elseif err.code == "server_unavailable" then
         notify(
           "claudr: сервер herdr недоступен: сообщение не отправлено",
@@ -227,14 +282,35 @@ local function request_prompt(pane_id, title, text, opts)
         notify(error_text("agent.prompt", err), vim.log.levels.ERROR)
       end
     else
-      notify(("claudr: сообщение отправлено агенту %s"):format(title))
+      if ctl then
+        ctl.close()
+      end
+      if working then
+        notify(
+          ("claudr: агент %s работает: сообщение встанет в очередь агента"):format(
+            title
+          )
+        )
+      else
+        notify(("claudr: сообщение отправлено агенту %s"):format(title))
+      end
     end
     done(opts, err, result)
   end)
 end
 
---- Сообщение агенту. `opts`: `node` (узел дерева), `pane_id`, `text` (без него — ввод через
---- `vim.ui.input`), `on_done(err, result)`.
+-- Ключ черновика: сессия панели, а без неё — сама панель.
+local function draft_key(pane_id)
+  for _, p in ipairs(herdr.state().snapshot.panes or {}) do
+    if p.pane_id == pane_id then
+      return herdr.session_id(p) or pane_id
+    end
+  end
+  return pane_id
+end
+
+--- Сообщение агенту: текст набирается в окне ввода (`claudr.input`). `opts`: `node` (узел
+--- дерева), `pane_id`, `text` (готовый текст: окно не открывается), `on_done(err, result)`.
 ---@param opts table|nil
 function M.send_message(opts)
   opts = opts or {}
@@ -244,16 +320,20 @@ function M.send_message(opts)
     return
   end
   pick_pane(opts, node, function(pane_id, title)
-    local function send(text)
-      if text and vim.trim(text) ~= "" then
-        request_prompt(pane_id, title, text, opts)
-      end
-    end
     if opts.text then
-      send(opts.text)
-    else
-      vim.ui.input({ prompt = ("Сообщение для %s: "):format(title) }, send)
+      if vim.trim(opts.text) ~= "" then
+        request_prompt(pane_id, title, opts.text, opts)
+      end
+      return
     end
+    require("claudr.input").open({
+      title = ("Сообщение для %s"):format(title),
+      target = { kind = "message", key = draft_key(pane_id) },
+      on_submit = function(text, close, release)
+        request_prompt(pane_id, title, text, opts, { close = close, release = release })
+        return true
+      end,
+    })
   end)
 end
 

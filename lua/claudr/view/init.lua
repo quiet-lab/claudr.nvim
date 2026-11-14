@@ -41,6 +41,12 @@ local function add_view_keys(v)
   if v.kind == "observe" then
     map(M.KEYS.scrollback, M.scrollback, "claudr: история панели")
   end
+  local message_key = require("claudr.config").get().message_input.key
+  if message_key and (v.kind == "observe" or v.kind == "scrollback") then
+    map(message_key, function(node)
+      require("claudr.messaging").send_message({ node = node })
+    end, "claudr: сообщение агенту")
+  end
   return v
 end
 

@@ -85,9 +85,39 @@ function M.methods_after(d, from)
   return out
 end
 
+--- Окно ввода, открытое сейчас (текущий буфер с типом `claudr-input`), или `nil`.
+function M.input_buf()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].filetype == "claudr-input" then
+    return buf
+  end
+end
+
+--- Ждать окно ввода; возвращает его буфер.
+function M.wait_input(msg)
+  t.wait(function()
+    return M.input_buf() ~= nil
+  end, msg or "окно ввода")
+  return M.input_buf()
+end
+
+--- Набирает текст в окне ввода (заменяет содержимое буфера).
+function M.set_text(buf, text)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
+end
+
+--- Отправка сохранением (`:w`) в буфере окна ввода.
+function M.write(buf)
+  vim.api.nvim_buf_call(buf, function()
+    vim.cmd("write")
+  end)
+end
+
 --- Уборка после теста.
 function M.reset()
   M.restore()
+  require("claudr.input").reset(true)
+  package.loaded["claudr.dialogs"] = nil
   s.reset()
 end
 
