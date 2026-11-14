@@ -19,6 +19,4 @@ Neovim, в любом workspace и любой вкладке можно запу
 
 ## Состояние
 
-Идёт разработка: первое изменение
-OpenSpec — `base-plugin` в [`openspec/changes/base-plugin/`](openspec/changes/base-plugin/).
-Руководство пользователя — в [`docs/README.md`](docs/README.md).
+Плагин написан. Руководство пользователя — в [`docs/README.md`](docs/README.md).

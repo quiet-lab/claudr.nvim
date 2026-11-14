@@ -266,7 +266,7 @@ describe("Агент не готов", function()
     t.eq(err.code, "agent_not_ready")
     t.ok(ms.noted(rec, "не готов"))
     t.ok(ms.noted(rec, "диалог доверия"))
-    t.ok(ms.noted(rec, "вид панели с вводом"))
+    t.ok(ms.noted(rec, ":Claudr attach"))
     t.eq(d:count("agent.start"), 1, "повторного agent.start нет")
     local pane = s.wait_node(result.pane_id, function(n)
       return n.pane_kind == "agent" and n.state == "blocked"
