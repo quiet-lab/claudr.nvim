@@ -54,6 +54,8 @@ require("claudr").setup({
 | `message_input.send` | `{ "<S-CR>", "<S-Space>" }` | Клавиши отправки в [окне ввода](message-input.md). |
 | `message_input.guard_commands` | `false` | Ведущий пробел перед текстом, начинающимся с `/` или `!`. |
 | `message_input.key` | `"m"` | Клавиша окна ввода в виде панели; `false` — не назначать. |
+| `file_references.preview` | `"K"` | Клавиша предпросмотра ссылки на файл в буферах плагина; `false` отключает ([ссылки на файлы](file-references.md)). |
+| `file_references.open` | `"gd"` | Клавиша открытия файла по ссылке; `false` отключает. |
 | `code_questions.model` | `"sonnet"` | Модель, которая отвечает на вопросы по коду. |
 | `code_questions.fork_from_base` | `false` | Ответвление новой темы от базовой сессии проекта; пока не поддерживается. |
 | `code_questions.mcp` | не задана | Необязательный MCP-сервер проекта как источник знаний для вопросов по коду. Без него плагин работает. |

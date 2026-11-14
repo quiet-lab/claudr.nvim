@@ -118,6 +118,13 @@ function M.open_dialogue(entry)
   vim.bo[buf].modifiable = false
   vim.bo[buf].readonly = true
   vim.bo[buf].modified = false
+  -- относительные пути ссылок — от рабочего каталога сессии из её транскрипта
+  local cwd = data.session_cwd(entry.path)
+  require("claudr.refs").attach(buf, {
+    cwd = function()
+      return cwd
+    end,
+  })
   vim.keymap.set(
     "n",
     "q",

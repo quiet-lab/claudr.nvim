@@ -15,6 +15,8 @@ local defaults = {
     -- клавиша окна ввода в виде панели; `false` — не назначать
     key = "m",
   },
+  -- клавиши ссылок на файлы в буферах плагина; `false` отключает клавишу
+  file_references = { preview = "K", open = "gd" },
   code_questions = {
     model = "sonnet",
     fork_from_base = false,

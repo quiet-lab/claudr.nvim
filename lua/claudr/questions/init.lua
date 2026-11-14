@@ -44,9 +44,6 @@ local function actions_for(topic)
         )
       end
     end,
-    jump = function()
-      window.jump(topic)
-    end,
   }
 end
 
