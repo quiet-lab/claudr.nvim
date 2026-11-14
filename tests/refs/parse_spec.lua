@@ -105,3 +105,24 @@ describe("Разрешение пути и существование файла
     t.eq(link_on(project.dir, "src"), nil)
   end)
 end)
+
+describe("Юникодные пробелы вокруг пути", function()
+  -- Claude Code ставит неразрывный пробел после знаков `⎿` и `●`; в буфере терминала он
+  -- стоит прямо перед путём и не должен входить в путь.
+  it("неразрывный пробел перед путём", function()
+    local link = link_on("  ⎿ \u{a0}" .. project.foo .. ":12 готово", "foo")
+    t.eq(link, { path = project.foo, line = 12 })
+  end)
+
+  it(
+    "неразрывный пробел после пути и в тексте вокруг",
+    function()
+      local link = link_on("●\u{a0}см.\u{a0}lua/foo.lua:42\u{a0}ниже", "foo")
+      t.eq(link, { path = project.foo, line = 42 })
+    end
+  )
+
+  it("узкий неразрывный и тонкий пробелы", function()
+    t.eq(link_on("a\u{202f}lua/foo.lua:3\u{2009}b", "foo"), { path = project.foo, line = 3 })
+  end)
+end)

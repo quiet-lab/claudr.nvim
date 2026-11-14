@@ -19,6 +19,17 @@ local attached = {}
 
 -- ---------- разбор ----------
 
+-- Юникодные пробелы (U+00A0, U+2000–U+200B, U+202F, U+205F, U+3000) заменяются пробелами
+-- той же длины в байтах: Claude Code ставит неразрывный пробел после знаков `⎿` и `●` и
+-- перед путём, и такой пробел иначе вошёл бы в путь; смещения в строке не меняются.
+local function blank_spaces(line)
+  line = line:gsub("\xc2\xa0", "  ")
+  line = line:gsub("\xe2\x80[\x80-\x8b\xaf]", "   ")
+  line = line:gsub("\xe2\x81\x9f", "   ")
+  line = line:gsub("\xe3\x80\x80", "   ")
+  return line
+end
+
 --- Ссылка под курсором по тексту строки, без проверки файла. Возвращает список вариантов
 --- разбора от самого полного (`файл:строка:столбец`) к самому короткому (весь текст как
 --- путь): `{ { path, line|nil, col|nil }, … }`; `nil`, если курсор не на ссылке.
@@ -26,6 +37,7 @@ local attached = {}
 ---@param col integer столбец курсора в байтах с нуля
 ---@return table[]|nil
 function M.parse(line, col)
+  line = blank_spaces(line)
   local idx = col + 1
   if idx < 1 or idx > #line or line:sub(idx, idx):find(DELIM) then
     return nil
