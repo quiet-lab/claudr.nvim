@@ -37,8 +37,18 @@ local function do_close(w, keep_draft)
   if open_windows[w.key] == w then
     open_windows[w.key] = nil
   end
+  -- Отправка клавишей из режима вставки закрывает окно, не выходя из режима: без выхода
+  -- режим вставки перешёл бы в прежнее окно (буфер диалога, вид панели), где клавиши
+  -- нормального режима не действуют.
+  local leave_insert = w.win
+    and vim.api.nvim_win_is_valid(w.win)
+    and vim.api.nvim_get_current_win() == w.win
+    and vim.fn.mode():sub(1, 1) == "i"
   if w.win and vim.api.nvim_win_is_valid(w.win) then
     pcall(vim.api.nvim_win_close, w.win, true)
+  end
+  if leave_insert then
+    vim.cmd("stopinsert")
   end
   if vim.api.nvim_buf_is_valid(w.buf) then
     pcall(vim.api.nvim_buf_delete, w.buf, { force = true })
