@@ -69,7 +69,7 @@ describe("Слежение за изменениями", function()
     local dir = u.fresh("owner-killed")
     local sid = fixtures.session_id("owner-killed")
     local sub = fixtures.session_dir("owner-killed", dir) .. "/subagents"
-    local h = data.watch_session(sid, function() end)
+    local h = u.watch_session(sid, function() end)
     t.eq(h:state().subagents.a0000000000000005.finished, false)
     fixtures.append(
       sub .. "/agent-a0000000000000005.jsonl",

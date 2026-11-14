@@ -57,7 +57,7 @@ end)
 describe("Устойчивость к неизвестному", function()
   it("Новое поле", function()
     u.fresh("unknown-records")
-    local h = data.watch_session(fixtures.session_id("unknown-records"), function() end)
+    local h = u.watch_session(fixtures.session_id("unknown-records"), function() end)
     local s = h:state()
     t.eq(vim.tbl_keys(s.subagents), { "a0000000000000010" })
     local a = s.subagents.a0000000000000010
@@ -129,7 +129,7 @@ describe("Устойчивость к неизвестному", function()
         "[1,2,3]",
         "null",
       })
-      local h = data.watch_session(sid, function() end)
+      local h = u.watch_session(sid, function() end)
       local s = h:state()
       t.eq(vim.tbl_keys(s.subagents), { "a0000000000000031" })
       local a = s.subagents.a0000000000000031
@@ -155,7 +155,7 @@ describe("Устойчивость к неизвестному", function()
       local sub = fixtures.session_dir("unknown-records", dir) .. "/subagents"
       t.ok(vim.uv.fs_stat(sub .. "/agent-a0000000000000010.note.txt"))
       t.ok(vim.uv.fs_stat(sub .. "/unknown-dir/x.json"))
-      local h = data.watch_session(fixtures.session_id("unknown-records"), function() end)
+      local h = u.watch_session(fixtures.session_id("unknown-records"), function() end)
       t.eq(vim.tbl_keys(h:state().subagents), { "a0000000000000010" })
       -- новые посторонние файлы и каталоги по уведомлениям тоже пропускаются
       vim.fn.mkdir(sub .. "/workflows/wf_x", "p")
@@ -174,8 +174,8 @@ describe("Отсутствие таймеров и опроса", function()
     local dir = u.fresh({ "subagent-command", "command-survived" })
     local timers = u.timer_count()
     local handles = {
-      data.watch_session(fixtures.session_id("subagent-command"), function() end),
-      data.watch_session(fixtures.missing_session_id, function() end),
+      u.watch_session(fixtures.session_id("subagent-command"), function() end),
+      u.watch_session(fixtures.missing_session_id, function() end),
       data.watch_dialogue(fixtures.session_id("subagent-command"), function() end),
       data.watch_dialogue(fixtures.missing_session_id, function() end),
       assert(
@@ -186,6 +186,9 @@ describe("Отсутствие таймеров и опроса", function()
       ),
     }
     -- уже записанное отдаётся по запросу подписчика; дальше уведомлений нет — чтений нет
+    u.wait(function()
+      return not handles[3].reading
+    end, "первое чтение диалога")
     u.settle()
     local reads = u.count_reads()
     local ok, err = pcall(function()

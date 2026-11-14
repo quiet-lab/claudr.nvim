@@ -118,6 +118,101 @@ function M.read_lines(t)
   return lines
 end
 
+--- Размер порции асинхронного чтения, байт.
+M.CHUNK = 256 * 1024
+
+--- Асинхронное чтение новых полных строк с запомненного смещения читателя `t` порциями
+--- по `M.CHUNK` байт. Файл читается до конца, в том числе дописанное во время чтения.
+--- `on_text(text)` получает кусок из целых строк (каждая оканчивается переводом строки)
+--- в обычном контексте Neovim; следующая порция запрашивается после обработки предыдущей,
+--- поэтому между порциями цикл событий обрабатывает остальные события. Незаконченная
+--- последняя строка не отдаётся и не сдвигает смещение. `on_done(found)` — после конца
+--- файла; `found = false` — файла нет. Когда `cancelled()` возвращает true, чтение
+--- прекращается без дальнейших вызовов.
+function M.read_lines_async(t, on_text, on_done, cancelled)
+  local fd, pos
+  local carry = {} -- куски незаконченной строки
+  local function stopped()
+    return cancelled ~= nil and cancelled()
+  end
+  local function finish(found)
+    if fd then
+      uv.fs_close(fd, function() end)
+      fd = nil
+    end
+    if found ~= nil and not stopped() then
+      on_done(found)
+    end
+  end
+  local step
+  local function on_read(err, data)
+    vim.schedule(function()
+      if stopped() then
+        finish(nil)
+        return
+      end
+      if err or not data or data == "" then
+        finish(true)
+        return
+      end
+      pos = pos + #data
+      local r = data:reverse():find("\n", 1, true)
+      if not r then
+        carry[#carry + 1] = data
+      else
+        local last = #data - r + 1
+        local head = last == #data and data or data:sub(1, last)
+        local text = head
+        if #carry > 0 then
+          carry[#carry + 1] = head
+          text = table.concat(carry)
+        end
+        carry = {}
+        if last < #data then
+          carry[1] = data:sub(last + 1)
+        end
+        t.offset = pos - (#data - last)
+        on_text(text)
+        if stopped() then
+          finish(nil)
+          return
+        end
+      end
+      step()
+    end)
+  end
+  step = function()
+    uv.fs_read(fd, M.CHUNK, pos, on_read)
+  end
+  uv.fs_open(t.path, "r", 438, function(err, f)
+    if err or not f then
+      vim.schedule(function()
+        finish(false)
+      end)
+      return
+    end
+    fd = f
+    uv.fs_fstat(f, function(serr, st)
+      vim.schedule(function()
+        if stopped() then
+          finish(nil)
+          return
+        end
+        if serr or not st then
+          finish(false)
+          return
+        end
+        if st.size < t.offset then
+          -- файл заменён или усечён: читается заново
+          t.offset = 0
+        end
+        pos = t.offset
+        step()
+      end)
+    end)
+  end)
+end
+
 --- Новые байты файла с запомненного смещения (кусок вывода). nil — файла нет.
 function M.read_chunk(t)
   local data = read_from(t)

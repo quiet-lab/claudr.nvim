@@ -231,12 +231,25 @@ function M.render()
   if not buf_valid() then
     return
   end
+  local lines, ids, marks = compose()
+  -- Содержимое не изменилось (например, снимок перечитан по событию вывода панели, а
+  -- подписи и состояния те же): буфер не перерисовывается.
+  local drawn = S.drawn
+  if
+    drawn
+    and drawn.buf == S.buf
+    and vim.deep_equal(drawn.lines, lines)
+    and vim.deep_equal(drawn.marks, marks)
+  then
+    S.line_ids = ids
+    return
+  end
+  S.drawn = { buf = S.buf, lines = lines, marks = marks }
   local keep = {}
   for _, win in ipairs(vim.fn.win_findbuf(S.buf)) do
     local row = vim.api.nvim_win_get_cursor(win)[1]
     keep[win] = { id = S.line_ids[row], row = row }
   end
-  local lines, ids, marks = compose()
   vim.bo[S.buf].modifiable = true
   vim.api.nvim_buf_set_lines(S.buf, 0, -1, false, lines)
   vim.bo[S.buf].modifiable = false

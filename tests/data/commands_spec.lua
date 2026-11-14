@@ -8,7 +8,7 @@ local data = require("claudr.data")
 local function watch(sample, extra)
   local dir = u.fresh(extra or sample)
   local changes = { n = 0 }
-  local h = data.watch_session(fixtures.session_id(sample), function(s)
+  local h = u.watch_session(fixtures.session_id(sample), function(s)
     changes.n = changes.n + 1
     changes.last = s
   end)
@@ -185,7 +185,7 @@ describe("Команда, запущенная субагентом", function()
     local sub = fixtures.session_dir("subagent-command", dir)
       .. "/subagents/agent-a0000000000000004.jsonl"
     u.split_transcript(sub, "<task-notification>")
-    local h = data.watch_session(fixtures.session_id("subagent-command"), function() end)
+    local h = u.watch_session(fixtures.session_id("subagent-command"), function() end)
     local task = h:state().tasks.bfixt0007
     t.eq(task.owner, "a0000000000000004")
     t.eq(task.result, "failed")
@@ -199,7 +199,7 @@ describe("Задача наблюдения", function()
     local path = fixtures.transcript("monitor")
     local rest = u.split_transcript(path, "<status>")
     local changes = 0
-    local h = data.watch_session(fixtures.session_id("monitor"), function()
+    local h = u.watch_session(fixtures.session_id("monitor"), function()
       changes = changes + 1
     end)
     local task = h:state().tasks.bfixt0001

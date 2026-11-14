@@ -7,7 +7,7 @@ local data = require("claudr.data")
 
 local function session_state(samples, main)
   u.fresh(samples)
-  local h = data.watch_session(fixtures.session_id(main or samples), function() end)
+  local h = u.watch_session(fixtures.session_id(main or samples), function() end)
   local s = h:state()
   return s, h
 end
@@ -40,7 +40,7 @@ describe("Субагенты сессии", function()
     local f = assert(io.open(sub .. "/agent-a0000000000000077.meta.json", "w"))
     f:write('{"agentType":"general-purpose","spawnDepth":1}')
     f:close()
-    local h = data.watch_session(fixtures.session_id("subagent-command"), function() end)
+    local h = u.watch_session(fixtures.session_id("subagent-command"), function() end)
     t.eq(ids(h:state().subagents), { "a0000000000000004" })
     h:close()
   end)
@@ -61,7 +61,7 @@ describe("Субагенты сессии", function()
       f:write('{"skillName":"x"}')
       f:close()
     end
-    local h2 = data.watch_session(fixtures.session_id("command-completed"), function() end)
+    local h2 = u.watch_session(fixtures.session_id("command-completed"), function() end)
     t.eq(h2:state().subagents, {})
     h2:close()
   end)
@@ -115,7 +115,7 @@ describe("Отметка завершения субагента", function()
       .. "/subagents/agent-a0000000000000006.jsonl"
     local recs = fixtures.records(sub)
     t.eq(recs[#recs].message.content[1].text, "[Request interrupted by user]")
-    local h = data.watch_session(fixtures.session_id("subagent-stopped"), function() end)
+    local h = u.watch_session(fixtures.session_id("subagent-stopped"), function() end)
     local a = h:state().subagents.a0000000000000006
     t.eq(a.finished, false, "отметки завершения в meta.json нет")
     h:close()
@@ -160,7 +160,7 @@ describe("Остановленный и фоновый субагент", functi
   it("Субагент убит вместе с родителем", function()
     u.fresh("owner-killed")
     local changed
-    local h = data.watch_session(fixtures.session_id("owner-killed"), function(st)
+    local h = u.watch_session(fixtures.session_id("owner-killed"), function(st)
       changed = st
     end)
     t.eq(h:state().subagents.a0000000000000005.status, "running")

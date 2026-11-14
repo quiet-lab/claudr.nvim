@@ -261,6 +261,83 @@ function M.feed(ledger, rec, owner)
   pcall(feed, ledger, rec, owner)
 end
 
+-- Инструменты, результат вызова которых учитывает `on_tool_result`.
+local RESULT_TOOLS = { Bash = true, Monitor = true, TaskStop = true, Agent = true, Task = true }
+
+-- Нужен ли учёту результат вызова `id`: вызов записан и `on_tool_result` его разбирает.
+local function wanted_result(ledger, id)
+  local use = ledger.uses[id]
+  if not use or not RESULT_TOOLS[use.name] then
+    return false
+  end
+  return use.name ~= "Bash" or use.input.run_in_background == true
+end
+
+local HUGE = math.huge
+
+-- Следующее вхождение `needle` в `text` не раньше `pos`; нет — HUGE.
+local function next_at(text, needle, pos)
+  return text:find(needle, pos, true) or HUGE
+end
+
+--- Учитывает строки транскрипта `text` (целые строки с переводом строки) владельца
+--- `owner`, как `feed` для каждой записи, но декодирует только строки, которые могут
+--- изменить учёт: с блоком `<task-notification>`, с вызовом инструмента из `RESULT_TOOLS`,
+--- с результатом вызова, который учёт разбирает. Остальные записи `feed` пропустил бы,
+--- поэтому итог тот же. Поиск признаков идёт по всему куску, без копирования строк.
+function M.scan(ledger, text, owner)
+  local n = #text
+  local pos = 1
+  local note = next_at(text, "task-notification", 1)
+  local use = next_at(text, '"tool_use"', 1)
+  local res = next_at(text, '"tool_use_id"', 1)
+  local name = next_at(text, '"name"', 1)
+  while pos <= n do
+    local e = text:find("\n", pos, true) or (n + 1)
+    if note < pos then
+      note = next_at(text, "task-notification", pos)
+    end
+    if use < pos then
+      use = next_at(text, '"tool_use"', pos)
+    end
+    local want = note < e
+    if not want and use < e then
+      -- вызов инструмента: имя одного из вызовов строки — из RESULT_TOOLS
+      if name < pos then
+        name = next_at(text, '"name"', pos)
+      end
+      while name < e do
+        local tool = text:match('^"name"%s*:%s*"([%w_]+)"', name)
+        name = next_at(text, '"name"', name + 1)
+        if tool and RESULT_TOOLS[tool] then
+          want = true
+          break
+        end
+      end
+    end
+    if not want then
+      if res < pos then
+        res = next_at(text, '"tool_use_id"', pos)
+      end
+      while res < e do
+        local id = text:match('^"tool_use_id"%s*:%s*"([^"]+)"', res)
+        res = next_at(text, '"tool_use_id"', res + 1)
+        if id and wanted_result(ledger, id) then
+          want = true
+          break
+        end
+      end
+    end
+    if want and e > pos then
+      local rec = M.decode(text:sub(pos, e - 1))
+      if rec then
+        M.feed(ledger, rec, owner)
+      end
+    end
+    pos = e + 1
+  end
+end
+
 --- Субагент из разобранного meta.json: поля `agent_type`, `description`, `tool_use_id`,
 --- `spawn_depth`, `parent_id`, `model`, `finished`.
 function M.subagent(id, meta)
