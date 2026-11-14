@@ -115,7 +115,7 @@ function M.workspace(o)
     tab_count = 1,
     active_tab_id = id .. ":t1",
     agent_status = "unknown",
-    tokens = dict({ symbol = "📁" }),
+    tokens = dict({ symbol = "S", color = "#336699" }),
   }
   for k, v in pairs(o) do
     rec[k] = v
@@ -970,6 +970,21 @@ function D:set_agent_status(pane_id, status)
     pane_id = p.pane_id,
     workspace_id = p.workspace_id,
   })
+end
+
+--- Смена состояния вкладки в снимке; события о нём нет — клиент видит его при следующем
+--- чтении снимка (например, после `d:emit("tab.renamed", …)`).
+function D:set_tab_status(tab_id, status)
+  local tab = assert(self:_tab(tab_id), "нет вкладки " .. tab_id)
+  tab.agent_status = status
+end
+
+--- Токены workspace в снимке и событие `workspace.updated`. `nil` убирает поле, `vim.NIL`
+--- даёт `null`, любое другое значение (в том числе не таблица) передаётся как есть.
+function D:set_workspace_tokens(workspace_id, tokens)
+  local ws = assert(self:_workspace(workspace_id), "нет workspace " .. workspace_id)
+  ws.tokens = tokens
+  return self:emit("workspace.updated", { workspace_id = workspace_id })
 end
 
 --- Завершение процесса в панели: `pane_updated` и `pane_exited` (без кода выхода).

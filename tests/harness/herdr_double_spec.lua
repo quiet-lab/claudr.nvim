@@ -1124,3 +1124,55 @@ describe("поддельный herdr: terminal attach", function()
     t.match(r.stderr, "ZeroSizedGridError")
   end)
 end)
+
+describe("значки и токены в снимке", function()
+  it(
+    "workspace отдаёт токены symbol и color, вкладка — agent_status",
+    function()
+      local snap = client():call("session.snapshot").result.snapshot
+      t.eq(snap.workspaces[1].tokens, { symbol = "S", color = "#336699" })
+      t.eq(snap.tabs[1].agent_status, "unknown")
+      d:set_tab_status("w1:t1", "working")
+      snap = client():call("session.snapshot").result.snapshot
+      t.eq(snap.tabs[1].agent_status, "working")
+    end
+  )
+
+  it(
+    "токены workspace задаёт тест: таблица, null и убранное поле",
+    function()
+      d:set_workspace_tokens("w1", { symbol = "Q", color = "#112233" })
+      local ws = client():call("session.snapshot").result.snapshot.workspaces[1]
+      t.eq(ws.tokens, { symbol = "Q", color = "#112233" })
+      d:set_workspace_tokens("w1", vim.NIL)
+      ws = client():call("session.snapshot").result.snapshot.workspaces[1]
+      t.eq(ws.tokens, vim.NIL)
+      d:set_workspace_tokens("w1", nil)
+      ws = client():call("session.snapshot").result.snapshot.workspaces[1]
+      t.eq(ws.tokens, nil)
+    end
+  )
+
+  it(
+    "состояния done и неизвестное значение попадают в снимок и в событие",
+    function()
+      local c = client()
+      t.eq(
+        c:call(
+          "events.subscribe",
+          { subscriptions = { { type = "pane.agent_status_changed", pane_id = "w1:p2" } } }
+        ).result.type,
+        "subscription_started"
+      )
+      d:set_agent_status("w1:p2", "done")
+      d:set_agent_status("w1:p2", "paused")
+      t.wait(function()
+        return #c.frames >= 3
+      end, "два события")
+      t.eq(c.frames[2].data.agent_status, "done")
+      t.eq(c.frames[3].data.agent_status, "paused")
+      local snap = client():call("session.snapshot").result.snapshot
+      t.eq(snap.panes[2].agent_status, "paused")
+    end
+  )
+end)

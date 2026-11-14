@@ -56,6 +56,30 @@ local function empty_snapshot()
   return { workspaces = {}, tabs = {}, panes = {} }
 end
 
+-- Токены workspace (`symbol`, `color`) — таблица строк: нет поля, `null` или не таблица
+-- дают `{}`, нестроковые значения отбрасываются. Единственное место нормализации.
+local function string_tokens(v)
+  local out = {}
+  if type(v) == "table" then
+    for k, val in pairs(v) do
+      if type(k) == "string" and type(val) == "string" then
+        out[k] = val
+      end
+    end
+  end
+  return out
+end
+
+local function normalize_snapshot(snap)
+  if type(snap) ~= "table" then
+    return empty_snapshot()
+  end
+  for _, ws in ipairs(type(snap.workspaces) == "table" and snap.workspaces or {}) do
+    ws.tokens = string_tokens(ws.tokens)
+  end
+  return snap
+end
+
 local S = {
   started = false,
   gen = 0, -- поколение подключения: ответы и события прежних поколений отбрасываются
@@ -398,7 +422,7 @@ refresh = function()
       end
       return
     end
-    S.snapshot = (result and result.snapshot) or empty_snapshot()
+    S.snapshot = normalize_snapshot(result and result.snapshot)
     S.stale = S.dirty
     set_status("connected", nil)
     if S.dirty then
