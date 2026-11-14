@@ -347,11 +347,15 @@ describe("Завершённые узлы", function()
       return n.state == "working"
     end)
     t.eq(model.get("w1:p1/a0000000000000002").state, "finished")
-    t.ok(model.visible(model.get("w1:p1/a0000000000000002")))
+    t.eq(
+      model.visible(model.get("w1:p1/a0000000000000002")),
+      false,
+      "в окне дерева не показан, в модели остаётся"
+    )
   end)
 
   it("Скрытие завершённых", function()
-    require("claudr").setup()
+    require("claudr").setup({ show_finished = true })
     local d = s.env(
       s.snapshot({
         s.claude_pane("w1:p1", "subagent-nested"),
@@ -364,7 +368,7 @@ describe("Завершённые узлы", function()
     s.wait_node("w1:p3/bfixt0005", function(n)
       return n.state == "orphaned"
     end)
-    t.eq(model.show_finished(), true, "по умолчанию показывать")
+    t.eq(model.show_finished(), true, "показ включён")
     local notified = 0
     local unsub = model.subscribe(function()
       notified = notified + 1
@@ -381,14 +385,35 @@ describe("Завершённые узлы", function()
     t.eq(model.visible(model.get("w1:p1/a0000000000000002")), true)
   end)
 
-  it(
-    "show_finished = false в настройках скрывает завершённые сразу",
-    function()
-      require("claudr").setup({ show_finished = false })
-      s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
-      t.eq(model.visible(s.wait_node("w1:p1/a0000000000000002")), false)
-    end
-  )
+  it("Скрыты по умолчанию", function()
+    require("claudr").setup()
+    t.eq(model.show_finished(), false)
+    s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", "subagent-nested"),
+        s.claude_pane("w1:p2", "command-completed"),
+      }),
+      { "subagent-nested", "command-completed" }
+    )
+    t.eq(model.visible(s.wait_node("w1:p1/a0000000000000002")), false, "субагент")
+    t.eq(model.visible(s.wait_node("w1:p2/bfixt0005")), false, "команда")
+  end)
+
+  it("Показ по команде", function()
+    require("claudr").setup()
+    s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", "subagent-nested"),
+        s.claude_pane("w1:p2", "command-completed"),
+      }),
+      { "subagent-nested", "command-completed" }
+    )
+    s.wait_node("w1:p2/bfixt0005")
+    vim.cmd("Claudr toggle-finished")
+    t.eq(model.show_finished(), true)
+    t.eq(model.visible(model.get("w1:p1/a0000000000000002")), true, "субагент")
+    t.eq(model.visible(model.get("w1:p2/bfixt0005")), true, "команда")
+  end)
 
   it("Закрытие панели владельца", function()
     local d = s.env(
@@ -481,9 +506,22 @@ describe("Обновление по событиям", function()
   end)
 
   it(
-    "в коде дерева нет таймеров и отложенных вызовов",
+    "в коде дерева нет таймеров и отложенных вызовов, кроме таймера кадров",
     function()
-      for _, name in ipairs({ "init.lua", "model.lua", "view.lua" }) do
+      -- таймер кадров — единственный, в view.lua, под меткой WARNING (решение D38)
+      local vf = assert(io.open(t.root .. "/lua/claudr/tree/view.lua", "r"))
+      local vtext = vf:read("*a")
+      vf:close()
+      local _, timers = vtext:gsub("new_timer", "")
+      t.eq(timers, 1, "один таймер кадров")
+      t.ok(
+        vtext:find("WARNING: таймер", 1, true),
+        "метка WARNING над таймером кадров"
+      )
+      for _, pattern in ipairs({ "defer_fn", "timer_start", "new_idle", "new_check" }) do
+        t.ok(not vtext:find(pattern, 1, true), "view.lua: " .. pattern)
+      end
+      for _, name in ipairs({ "init.lua", "model.lua" }) do
         local path = t.root .. "/lua/claudr/tree/" .. name
         local f = assert(io.open(path, "r"))
         local text = f:read("*a")

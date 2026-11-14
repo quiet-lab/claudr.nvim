@@ -22,6 +22,8 @@ after_each(function()
 end)
 
 local function env()
+  -- субагент образца завершён: показ завершённых включается явно
+  require("claudr.config").setup({ show_finished = true })
   local sample = "subagent-command"
   s.env(s.snapshot({ s.claude_pane("w1:p1", sample, { agent_status = "blocked" }) }), sample)
   s.wait_node("w1:p1")
@@ -47,7 +49,11 @@ describe("Ждущие запросы", function()
     t.eq(line("w1:p1"):find("ждут", 1, true), nil, "без запросов числа нет")
     ds.add(pending, "permission-bash")
     ds.add(pending, "permission-read")
-    t.match(line("w1:p1"), "%[blocked%] %[ждут: 2%]")
+    t.match(
+      line("w1:p1"),
+      "opus задача w1:p1 %[ждут: 2%]$",
+      "число после подписи"
+    )
   end)
 
   it("Субагент и главная сессия", function()

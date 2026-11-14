@@ -3,10 +3,14 @@ local M = {}
 
 ---@class claudr.Config
 ---@field show_finished boolean показывать завершённые субагенты и фоновые команды в дереве
+---@field icons "herdr"|"text" вид узлов дерева: значки herdr или буквенные обозначения
 ---@field message_input claudr.MessageInputConfig
 ---@field code_questions claudr.CodeQuestionsConfig
 local defaults = {
-  show_finished = true,
+  -- завершённые субагенты и фоновые команды в дереве скрыты (решение D40)
+  show_finished = false,
+  -- "herdr" — значки и цвета как в herdr; "text" — буквенные обозначения (решение D42)
+  icons = "herdr",
   message_input = {
     -- клавиши отправки в окне ввода (нормальный режим и режим вставки); `:w` работает всегда
     send = { "<S-CR>", "<S-Space>" },

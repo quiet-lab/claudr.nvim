@@ -40,7 +40,8 @@ require("claudr").setup()
 
 ```lua
 require("claudr").setup({
-  show_finished = true,
+  show_finished = false,
+  icons = "herdr",
   code_questions = {
     model = "sonnet",
     fork_from_base = false,
@@ -50,7 +51,8 @@ require("claudr").setup({
 
 | Настройка | По умолчанию | Назначение |
 |---|---|---|
-| `show_finished` | `true` | Показывать в дереве завершённые субагенты и фоновые команды. Переключается командой дерева (см. [дерево](tree.md)). |
+| `show_finished` | `false` | Показывать в дереве завершённые субагенты и фоновые команды. Переключается командой и клавишей дерева (см. [дерево](tree.md)). |
+| `icons` | `"herdr"` | Вид узлов дерева: `"herdr"` — значки состояний, символы и цвета workspace из herdr; `"text"` — буквенные обозначения без цвета и анимации (см. [дерево](tree.md)). |
 | `message_input.send` | `{ "<S-CR>", "<S-Space>" }` | Клавиши отправки в [окне ввода](message-input.md). |
 | `message_input.guard_commands` | `false` | Ведущий пробел перед текстом, начинающимся с `/` или `!`. |
 | `message_input.key` | `"m"` | Клавиша окна ввода в виде панели; `false` — не назначать. |

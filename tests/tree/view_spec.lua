@@ -32,7 +32,7 @@ end
 
 describe("Открытие дерева", function()
   it("подкоманда tree открывает буфер дерева в окне", function()
-    require("claudr").setup()
+    require("claudr").setup({ show_finished = true })
     s.env(
       s.snapshot({
         s.claude_pane("w1:p1", "subagent-command"),
@@ -46,16 +46,16 @@ describe("Открытие дерева", function()
     t.eq(vim.api.nvim_buf_get_name(buf), view.BUF_NAME)
     t.eq(vim.bo[buf].modifiable, false)
     t.eq(vim.bo[buf].filetype, "claudr-tree")
-    wait_line("&.*Wait for background sleep command output")
+    wait_line("🔧 Wait for background sleep command output")
     local lines = view.lines()
-    t.eq(lines[1], "▾ W ws1")
-    t.eq(lines[2], "  ▾ T main")
-    t.match(lines[3], "^    ▾ A opus задача w1:p1 %[idle%]$")
-    t.match(
+    t.eq(lines[1], "▾ 📁 ws1")
+    t.eq(lines[2], "  ▾ main")
+    t.eq(lines[3], "    ▾ opus задача w1:p1")
+    t.eq(
       lines[4],
-      "^      ▾ S Проверка фонового Bash с кодом выхода %(general%-purpose%) %[завершён%]$"
+      "      ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
     )
-    t.match(lines[5], "^          & Wait for background sleep command output %[завершён%]$")
+    t.eq(lines[5], "          🔧 Wait for background sleep command output")
     t.eq(lines[#lines], "      $ cargo /src")
     -- повторный вызов не открывает второе окно
     local wins = #vim.api.nvim_tabpage_list_wins(0)
@@ -78,10 +78,14 @@ describe("Перерисовка", function()
   it("строка панели меняется по событию herdr", function()
     local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
     view.open()
-    wait_line("%[idle%]")
+    wait_line("opus задача w1:p1")
+    t.eq(view._icon("w1:p1").text, s.ICONS.idle.frames[1])
     view.focus("w1:p1/a0000000000000005")
     d:set_agent_status("w1:p1", "blocked")
-    wait_line("A opus задача w1:p1 %[blocked%]")
+    t.wait(function()
+      local ic = view._icon("w1:p1")
+      return ic and ic.text == s.ICONS.blocked.frames[1]
+    end, "значок blocked")
     t.eq(
       view.node_at_cursor().id,
       "w1:p1/a0000000000000005",
@@ -92,6 +96,7 @@ describe("Перерисовка", function()
   it(
     "переключение показа завершённых скрывает их строки",
     function()
+      require("claudr.config").setup({ show_finished = true })
       local d = s.env(
         s.snapshot({
           s.claude_pane("w1:p1", "subagent-nested"),
@@ -102,14 +107,16 @@ describe("Перерисовка", function()
       )
       view.open()
       d:pane_exited("w1:p3")
-      wait_line("%[оборван%]")
+      s.wait_node("w1:p3/bfixt0005", function(n)
+        return n.state == "orphaned"
+      end)
       t.ok(has_line("outer"))
       press("F")
       t.eq(model.show_finished(), false)
       t.ok(not has_line("outer"), "завершённый скрыт")
       t.ok(not has_line("inner"), "завершённый вложенный скрыт")
-      t.ok(has_line("sleeper2.*%[работает%]"), "работающий остаётся")
-      t.ok(has_line("%[оборван%]"), "оборванный остаётся")
+      t.ok(view.line_of("w1:p2/a0000000000000005"), "работающий остаётся")
+      t.ok(view.line_of("w1:p3/bfixt0005"), "оборванный остаётся")
       press("F")
       t.ok(has_line("outer"))
     end
@@ -117,6 +124,11 @@ describe("Перерисовка", function()
 end)
 
 describe("Клавиши и действия", function()
+  before_each(function()
+    -- в образце subagent-nested субагенты завершены
+    require("claudr.config").setup({ show_finished = true })
+  end)
+
   it("свёртывание узла прячет его детей", function()
     s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
     view.open()
@@ -124,7 +136,7 @@ describe("Клавиши и действия", function()
     t.ok(view.focus("w1:p1"))
     press("<Tab>")
     t.ok(not has_line("outer"), "дети свёрнуты")
-    t.match(view.lines()[view.line_of("w1:p1")], "▸ A")
+    t.match(view.lines()[view.line_of("w1:p1")], "▸ opus")
     press("za")
     t.ok(has_line("outer"))
   end)
