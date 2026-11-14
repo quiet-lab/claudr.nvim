@@ -1,0 +1,14 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000031",
+ "transcript_path": "@CLAUDE@/projects/-srv-demo-alpha/00000000-0000-4000-8000-000000000031.jsonl",
+ "cwd": "@CWD@",
+ "prompt_id": "00000000-0000-4000-8000-000000000041",
+ "permission_mode": "plan",
+ "hook_event_name": "PermissionRequest",
+ "tool_name": "ExitPlanMode",
+ "tool_input": {
+  "plan": "# Plan: create plan-out.txt\n\n## Steps\n1. Check that `plan-out.txt` does not exist.\n2. Create it with the Write tool, content `x`.\n\n## Verification\nReading `plan-out.txt` returns `x`.\n",
+  "planFilePath": "@CLAUDE@/plans/sample-plan.md"
+ },
+ "permission_suggestions": null
+}

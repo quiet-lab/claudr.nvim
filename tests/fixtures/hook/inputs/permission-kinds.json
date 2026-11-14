@@ -1,0 +1,110 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000031",
+ "transcript_path": "@CLAUDE@/projects/-srv-demo-alpha/00000000-0000-4000-8000-000000000031.jsonl",
+ "cwd": "@CWD@",
+ "prompt_id": "00000000-0000-4000-8000-000000000041",
+ "permission_mode": "default",
+ "hook_event_name": "PermissionRequest",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "make build",
+  "description": "Build the project"
+ },
+ "permission_suggestions": [
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "Bash",
+     "ruleContent": "make build"
+    }
+   ],
+   "behavior": "allow",
+   "destination": "localSettings"
+  },
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "Read",
+     "ruleContent": "//etc/**"
+    }
+   ],
+   "behavior": "allow",
+   "destination": "session"
+  },
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "WebFetch"
+    }
+   ],
+   "behavior": "allow",
+   "destination": "projectSettings"
+  },
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "Bash",
+     "ruleContent": "make test"
+    },
+    {
+     "toolName": "Bash",
+     "ruleContent": "make lint"
+    }
+   ],
+   "behavior": "allow",
+   "destination": "userSettings"
+  },
+  {
+   "type": "addRules",
+   "rules": [
+    {
+     "toolName": "Bash",
+     "ruleContent": "rm *"
+    }
+   ],
+   "behavior": "deny",
+   "destination": "projectSettings"
+  },
+  {
+   "type": "addDirectories",
+   "directories": [
+    "@CWD@/lib"
+   ],
+   "destination": "session"
+  },
+  {
+   "type": "addDirectories",
+   "directories": [
+    "@CWD@/lib",
+    "@CWD@/vendor"
+   ],
+   "destination": "projectSettings"
+  },
+  {
+   "type": "setMode",
+   "mode": "acceptEdits",
+   "destination": "session"
+  },
+  {
+   "type": "setMode",
+   "mode": "plan",
+   "destination": "userSettings"
+  },
+  {
+   "type": "futureKind",
+   "payload": {
+    "x": 1
+   },
+   "destination": "projectSettings"
+  },
+  {
+   "type": "setMode",
+   "mode": "default",
+   "destination": "cloudSettings"
+  }
+ ]
+}
