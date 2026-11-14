@@ -197,6 +197,19 @@ function M._locate(session_id, cb)
   return L
 end
 
+--- Путь транскрипта субагента `agent_id` сессии `session_id` или nil, если транскрипт
+--- сессии не найден. Файл субагента может ещё не существовать.
+function M.subagent_transcript(session_id, agent_id)
+  if not valid_id(agent_id) then
+    return nil
+  end
+  local path = M.find_transcript(session_id)
+  if not path then
+    return nil
+  end
+  return path:sub(1, -7) .. "/subagents/agent-" .. agent_id .. ".jsonl"
+end
+
 --- Следит за диалогом транскрипта: аргумент — идентификатор сессии (транскрипт ищется,
 --- при отсутствии — ожидается его создание) или путь файла. `on_replies(replies)` получает
 --- сначала уже записанные реплики, затем новые по мере записи. Возвращает handle с `close()`.
