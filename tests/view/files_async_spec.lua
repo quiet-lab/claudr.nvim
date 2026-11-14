@@ -110,7 +110,7 @@ describe(
               closed = true
               vim.schedule(function()
                 if vim.api.nvim_win_is_valid(v.win) then
-                  vim.api.nvim_win_close(v.win, true)
+                  s.close_win(v)
                 end
               end)
             end

@@ -1,8 +1,8 @@
 -- Ссылки на файлы в буферах плагина (спецификация file-references): путь под курсором
 -- (`файл`, `файл:строка`, `файл:строка:столбец`), предпросмотр в плавающем окне и открытие
--- файла в окне редактирования. Клавиши назначаются только в буферах, которые подключены
--- через `M.attach`; вне ссылки клавиша ведёт себя как без плагина. Закрытие предпросмотра
--- идёт по событиям редактора, таймеров нет.
+-- файла в окне, из которого сделан переход. Клавиши назначаются только в буферах, которые
+-- подключены через `M.attach`; вне ссылки клавиша ведёт себя как без плагина. Закрытие
+-- предпросмотра идёт по событиям редактора, таймеров нет.
 local config = require("claudr.config")
 
 local M = {}
@@ -285,18 +285,24 @@ local function edit_window()
   return nil
 end
 
---- Открывает файл ссылки в окне редактирования на строке и столбце; без окна редактирования
---- создаётся новое. Буфер плагина остаётся на месте. Возвращает окно или `nil`.
+--- Открывает файл ссылки на строке и столбце: в окне, из которого сделан переход (обычный
+--- `:edit`, уход записывается в список переходов, `<C-o>` возвращает в буфер плагина); если
+--- текущее окно плавающее, файл открывается в окне редактирования, без него — в новом окне.
+--- Возвращает окно или `nil`.
 ---@param link { path: string, line: integer|nil, col: integer|nil }
 function M.open(link)
   M.close_preview()
-  local win = edit_window()
-  if win then
-    vim.api.nvim_set_current_win(win)
-  else
-    vim.cmd("topleft vsplit")
-    win = vim.api.nvim_get_current_win()
+  local win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_get_config(win).relative ~= "" then
+    win = edit_window()
+    if win then
+      vim.api.nvim_set_current_win(win)
+    else
+      vim.cmd("topleft vsplit")
+      win = vim.api.nvim_get_current_win()
+    end
   end
+  vim.cmd("normal! m'")
   local ok, err = pcall(vim.cmd.edit, vim.fn.fnameescape(link.path))
   if not ok then
     vim.notify(

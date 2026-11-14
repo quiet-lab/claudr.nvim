@@ -67,7 +67,7 @@ describe("Контейнеры — перечень панелей", function()
     t.wait(function()
       return lines(v.buf)[1]:find("[blocked]", 1, true) ~= nil
     end, "новое состояние в строке")
-    vim.api.nvim_win_close(v.win, true)
+    s.close_win(v)
   end)
 end)
 

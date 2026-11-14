@@ -3,8 +3,10 @@
 -- Процесс `herdr terminal session observe <панель>` печатает строки JSON кадров
 -- `terminal.frame`: байты ANSI в base64, первый кадр полный, далее приращения. Кадры
 -- передаются в буфер терминала Neovim (`nvim_open_term`): эмулятор терминала сам применяет
--- приращения. Ввода у буфера нет, процесс наблюдения ввод не читает. Размер окна берётся из
--- `width`/`height` кадра. Закрытие вида завершает процесс наблюдения по его PID сигналом
+-- приращения. Ввода у буфера нет, процесс наблюдения ввод не читает. Буфер показан в обычном
+-- окне, размер экрана терминала задаёт это окно, и тот же размер (`--cols`, `--rows`)
+-- запрашивается у сервера: клиент наблюдения получает кадры своего размера (решение D56).
+-- Закрытие вида завершает процесс наблюдения по его PID сигналом
 -- SIGTERM, панель остаётся живой. Обновление — только по выводу процесса, таймеров и опроса нет.
 local herdr = require("claudr.herdr")
 local window = require("claudr.view.window")
@@ -38,10 +40,8 @@ local function apply(v, frames)
     return
   end
   for _, f in ipairs(frames) do
-    if f.width and f.height and (f.width ~= v.width or f.height ~= v.height) then
-      v.width, v.height = f.width, f.height
-      window.resize(v.win, f.width, f.height)
-    end
+    -- размер окна вида задаёт раскладка Neovim, размер кадра только запоминается
+    v.width, v.height = f.width or v.width, f.height or v.height
     local bytes = f.bytes
     if f.full then
       -- полный кадр рисует экран заново
@@ -70,8 +70,7 @@ end
 function M.open(node)
   local pane_id = node.id
   local buf = window.scratch()
-  local win =
-    window.open_float(buf, { title = "наблюдение: " .. (node.label or pane_id) })
+  local win = window.open_view(buf, { title = "наблюдение: " .. (node.label or pane_id) })
   local chan = vim.api.nvim_open_term(buf, {})
   local v = {
     kind = "observe",
@@ -85,7 +84,17 @@ function M.open(node)
   vim.b[buf].claudr_node_id = pane_id
 
   local pending = ""
-  local ok, proc = pcall(vim.system, { "herdr", "terminal", "session", "observe", pane_id }, {
+  local ok, proc = pcall(vim.system, {
+    "herdr",
+    "terminal",
+    "session",
+    "observe",
+    "--cols",
+    tostring(vim.api.nvim_win_get_width(win)),
+    "--rows",
+    tostring(vim.api.nvim_win_get_height(win)),
+    pane_id,
+  }, {
     env = { HERDR_SOCKET_PATH = herdr.socket_path() },
     stdout = function(_, data)
       if not data then

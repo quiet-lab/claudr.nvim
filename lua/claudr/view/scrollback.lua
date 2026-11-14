@@ -37,8 +37,9 @@ local function render(v, recent, visible)
     lines = { "" }
   end
   window.set_lines(v.buf, lines)
-  if v.win and vim.api.nvim_win_is_valid(v.win) then
-    vim.api.nvim_win_set_cursor(v.win, { #lines, 0 })
+  local win = window.win_of(v)
+  if win then
+    vim.api.nvim_win_set_cursor(win, { #lines, 0 })
   end
 end
 
@@ -47,7 +48,7 @@ function M.open(node)
   local pane_id = node.id
   local buf = window.scratch()
   vim.bo[buf].modifiable = false
-  local win = window.open_float(buf, {
+  local win = window.open_view(buf, {
     title = "история: " .. require("claudr.tree.view").one_line(node.label or pane_id),
   })
   local v = { kind = "scrollback", node_id = pane_id, buf = buf, win = win }

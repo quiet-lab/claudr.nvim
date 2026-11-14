@@ -73,7 +73,7 @@ function M.open(node, opts)
     return nil
   end
   local buf = window.scratch()
-  local win = window.open_float(buf, { title = "ввод: " .. (node.label or node.id) })
+  local win = window.open_view(buf, { title = "ввод: " .. (node.label or node.id) })
   local v = { kind = "attach", node_id = node.id, node = node, buf = buf, win = win, output = {} }
   vim.b[buf].claudr_node_id = node.id
   local cmd = { "herdr", "terminal", "attach" }

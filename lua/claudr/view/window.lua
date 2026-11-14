@@ -1,6 +1,9 @@
--- Общее устройство видов узлов: плавающее окно, буфер только для чтения, учёт открытых видов
--- и их освобождение. Вид освобождается (процесс завершается, наблюдение закрывается) при
--- удалении буфера и при закрытии окна; таймеров нет.
+-- Общее устройство видов узлов: обычный буфер в окне, из которого открыто дерево (решения
+-- D50, D51), учёт открытых видов и их освобождение. Вид освобождается (процесс завершается,
+-- наблюдение закрывается) при удалении буфера и при закрытии окна, в котором он показан;
+-- уход из буфера (например, `gd` на ссылке) вид не освобождает, `<C-o>` возвращает в него.
+-- Плавающее окно (`open_float`) остаётся окнам, которые не виды узлов: буфер диалога агента.
+-- Таймеров нет.
 local M = {}
 
 -- буфер → вид
@@ -52,11 +55,107 @@ function M.open_float(buf, opts)
   return vim.api.nvim_open_win(buf, true, cfg)
 end
 
---- Меняет размер плавающего окна (размер ограничивается редактором).
-function M.resize(win, width, height)
-  if win and vim.api.nvim_win_is_valid(win) then
-    vim.api.nvim_win_set_config(win, geometry(width, height))
+local function is_normal(win)
+  return vim.api.nvim_win_is_valid(win)
+    and vim.api.nvim_win_get_config(win).relative == ""
+    and not vim.wo[win].winfixbuf
+end
+
+local function is_tree(win)
+  local tree_buf = require("claudr.tree.view").buf()
+  return tree_buf ~= nil and vim.api.nvim_win_get_buf(win) == tree_buf
+end
+
+local function usable(win)
+  return win and win ~= 0 and is_normal(win) and not is_tree(win)
+end
+
+--- Окно для вида узла: текущее окно, если оно обычное и не окно дерева (вид открыт командой
+--- или из другого вида); иначе окно, из которого открыто дерево; иначе предыдущее окно;
+--- иначе любое другое обычное окно вкладки; иначе `nil` (нужно новое окно).
+function M.target_window()
+  local cur = vim.api.nvim_get_current_win()
+  if usable(cur) then
+    return cur
   end
+  local origin = require("claudr.tree.view").origin_win()
+  if usable(origin) then
+    return origin
+  end
+  local prev = vim.fn.win_getid(vim.fn.winnr("#"))
+  if usable(prev) then
+    return prev
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if usable(win) then
+      return win
+    end
+  end
+  return nil
+end
+
+-- Настройки окна вида: местные для окна и буфера, поэтому после ухода из буфера окно
+-- возвращается к своим обычным.
+local VIEW_WINDOW_OPTIONS = {
+  number = false,
+  relativenumber = false,
+  signcolumn = "no",
+  foldcolumn = "0",
+  cursorline = false,
+  list = false,
+  spell = false,
+  colorcolumn = "",
+}
+
+--- Показывает буфер вида `buf` в окне `M.target_window()` (без него — в новом окне справа
+--- от дерева), делает окно текущим и записывает уход из прежнего буфера в список переходов.
+--- Буфер не удаляется при уходе из окна: `<C-o>` возвращает в вид. Возвращает окно.
+function M.open_view(buf, opts)
+  opts = opts or {}
+  local win = M.target_window()
+  if not win then
+    vim.cmd("rightbelow vertical new")
+    win = vim.api.nvim_get_current_win()
+    -- пустой буфер нового окна не нужен
+    local blank = vim.api.nvim_win_get_buf(win)
+    vim.api.nvim_win_set_buf(win, buf)
+    if blank ~= buf and vim.api.nvim_buf_is_valid(blank) then
+      pcall(vim.api.nvim_buf_delete, blank, { force = true })
+    end
+  else
+    vim.api.nvim_set_current_win(win)
+    vim.cmd("normal! m'")
+    local ok = pcall(vim.api.nvim_win_set_buf, win, buf)
+    if not ok then
+      -- прежний буфер окна не отпускает (например, `winfixbuf`): новое окно
+      vim.cmd("rightbelow vertical split")
+      win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(win, buf)
+    end
+  end
+  vim.bo[buf].bufhidden = "hide"
+  for name, value in pairs(VIEW_WINDOW_OPTIONS) do
+    vim.api.nvim_set_option_value(name, value, { scope = "local", win = win })
+  end
+  if opts.title then
+    pcall(
+      vim.api.nvim_buf_set_name,
+      buf,
+      ("claudr://%s [%d]"):format((opts.title:gsub("[\r\n]", " ")), buf)
+    )
+  end
+  return win
+end
+
+--- Окно, в котором сейчас показан вид `v` (его собственное, иначе первое, где виден буфер) или `nil`.
+function M.win_of(v)
+  if v.win and vim.api.nvim_win_is_valid(v.win) and vim.api.nvim_win_get_buf(v.win) == v.buf then
+    return v.win
+  end
+  if not vim.api.nvim_buf_is_valid(v.buf) then
+    return nil
+  end
+  return vim.fn.win_findbuf(v.buf)[1]
 end
 
 --- Новый буфер вида: без файла, удаляется при скрытии.
@@ -111,10 +210,17 @@ function M.register(v)
   end
   vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = release })
   if v.win then
+    -- закрытие окна, в котором вид открыт, закрывает вид, если буфер нигде больше не показан
     vim.api.nvim_create_autocmd("WinClosed", {
       pattern = tostring(v.win),
       once = true,
       callback = function()
+        -- закрываемое окно ещё числится среди окон буфера
+        for _, other in ipairs(vim.fn.win_findbuf(buf)) do
+          if other ~= v.win then
+            return
+          end
+        end
         release()
         -- буфер терминала с работающей программой окно само не удаляет
         vim.schedule(function()
@@ -128,14 +234,32 @@ function M.register(v)
   return v
 end
 
---- Закрывает вид: окно и буфер.
+-- Освобождает окно `win` от буфера `buf`, не закрывая окно: альтернативный буфер окна,
+-- иначе пустой.
+local function leave_window(win, buf)
+  local alt = vim.api.nvim_win_call(win, function()
+    return vim.fn.bufnr("#")
+  end)
+  if alt < 1 or alt == buf or not vim.api.nvim_buf_is_valid(alt) then
+    alt = vim.api.nvim_create_buf(true, false)
+  end
+  pcall(vim.api.nvim_win_set_buf, win, alt)
+end
+
+--- Закрывает вид: буфер удаляется, а окна, где он был показан, остаются на месте с прежним
+--- (альтернативным) буфером; плавающие окна закрываются.
 function M.close(v)
-  if v.win and vim.api.nvim_win_is_valid(v.win) then
-    pcall(vim.api.nvim_win_close, v.win, true)
+  if not vim.api.nvim_buf_is_valid(v.buf) then
+    return
   end
-  if vim.api.nvim_buf_is_valid(v.buf) then
-    pcall(vim.api.nvim_buf_delete, v.buf, { force = true })
+  for _, win in ipairs(vim.fn.win_findbuf(v.buf)) do
+    if vim.api.nvim_win_get_config(win).relative ~= "" then
+      pcall(vim.api.nvim_win_close, win, true)
+    else
+      leave_window(win, v.buf)
+    end
   end
+  pcall(vim.api.nvim_buf_delete, v.buf, { force = true })
 end
 
 --- Закрывает все открытые виды.

@@ -47,7 +47,7 @@ end
 --- `cwd`. Возвращает номер буфера.
 function M.plugin_buffer(lines, cwd)
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].bufhidden = "hide"
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.api.nvim_win_set_buf(0, buf)
   refs.attach(buf, {

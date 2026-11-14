@@ -34,15 +34,16 @@ local function reply_lines(replies)
 end
 
 local function follow_end(v)
-  if v.win and vim.api.nvim_win_is_valid(v.win) then
-    vim.api.nvim_win_set_cursor(v.win, { vim.api.nvim_buf_line_count(v.buf), 0 })
+  local win = window.win_of(v)
+  if win then
+    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(v.buf), 0 })
   end
 end
 
 local function new_view(kind, node, title)
   local buf = window.scratch()
   vim.bo[buf].modifiable = false
-  local win = window.open_float(buf, { title = title .. (node.label or node.id) })
+  local win = window.open_view(buf, { title = title .. (node.label or node.id) })
   local v = { kind = kind, node_id = node.id, buf = buf, win = win }
   vim.b[buf].claudr_node_id = node.id
   return v

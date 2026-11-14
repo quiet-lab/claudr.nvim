@@ -114,7 +114,9 @@ describe("Область и настройка клавиш", function()
   it("Терминальный буфер", function()
     local edit_win = vim.api.nvim_get_current_win()
     vim.cmd("vsplit")
+    local term_win = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].bufhidden = "hide"
     vim.api.nvim_win_set_buf(0, buf)
     local chan = vim.api.nvim_open_term(buf, {})
     refs.attach(buf, {
@@ -132,8 +134,13 @@ describe("Область и настройка клавиш", function()
     s.cursor_on("foo")
     s.press("gd")
     t.eq(vim.fs.normalize(vim.api.nvim_buf_get_name(0)), project.foo)
-    t.eq(vim.api.nvim_get_current_win(), edit_win)
-    t.eq(vim.api.nvim_win_get_cursor(edit_win), { 5, 2 })
+    t.eq(
+      vim.api.nvim_get_current_win(),
+      term_win,
+      "файл открыт в окне терминала"
+    )
+    t.ok(vim.api.nvim_win_is_valid(edit_win))
+    t.eq(vim.api.nvim_win_get_cursor(term_win), { 5, 2 })
     t.ok(
       vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal",
       "терминал на месте"

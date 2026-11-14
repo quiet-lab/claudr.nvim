@@ -280,7 +280,12 @@ end
 -- Разбор подкоманды ----------------------------------------------------------------------
 
 if args[1] == "terminal" and args[2] == "session" and args[3] == "observe" then
-  observe(args[4])
+  -- `--cols N` и `--rows N` (размер клиента наблюдения) перед целью; кадры тестов несут свой размер
+  local i = 4
+  while args[i] == "--cols" or args[i] == "--rows" do
+    i = i + 2
+  end
+  observe(args[i])
 elseif args[1] == "terminal" and args[2] == "attach" then
   attach(vim.list_slice(args, 3))
 else

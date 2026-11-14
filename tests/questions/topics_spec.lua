@@ -285,11 +285,8 @@ describe("Ссылки на код в ответе", function()
       vim.api.nvim_feedkeys("gd", "mx", false)
       t.eq(vim.fs.normalize(vim.api.nvim_buf_get_name(0)), p.foo)
       t.eq(vim.api.nvim_win_get_cursor(0)[1], 42)
-      t.ok(
-        vim.api.nvim_get_current_win() ~= win,
-        "переход в окне редактирования"
-      )
-      t.ok(vim.api.nvim_win_is_valid(win), "окно ответа осталось")
+      t.eq(vim.api.nvim_get_current_win(), win, "переход в том же окне")
+      t.ok(vim.api.nvim_buf_is_valid(topic.buf), "буфер темы жив")
       t.ok(code_win_buf)
     end
   )

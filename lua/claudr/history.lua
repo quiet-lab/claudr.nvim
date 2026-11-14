@@ -145,9 +145,23 @@ function M.open_dialogue(entry)
   end
   vim.cmd("rightbelow vnew")
   local buf = vim.api.nvim_get_current_buf()
+  local win = vim.api.nvim_get_current_win()
   vim.api.nvim_buf_set_name(buf, name)
   vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
+  -- буфер переживает уход из окна (переход по ссылке, `<C-o>` возвращает); закрытие окна,
+  -- где он показан, и `q` его удаляют
+  vim.bo[buf].bufhidden = "hide"
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) == 0 then
+          pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        end
+      end)
+    end,
+  })
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = M.FILETYPE
   vim.bo[buf].modifiable = false
@@ -190,7 +204,7 @@ function M.open_dialogue(entry)
   vim.keymap.set(
     "n",
     "q",
-    "<cmd>close<cr>",
+    "<cmd>bwipeout<cr>",
     { buffer = buf, silent = true, desc = "claudr: закрыть диалог" }
   )
   return buf

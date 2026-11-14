@@ -34,6 +34,15 @@ local function requests_except_snapshot(d)
   return out
 end
 
+-- Команда наблюдения: размер клиента — размер окна вида.
+local function observe_cmd(v, pane)
+  return ("terminal session observe --cols %d --rows %d %s"):format(
+    vim.api.nvim_win_get_width(v.win),
+    vim.api.nvim_win_get_height(v.win),
+    pane
+  )
+end
+
 local function observe_calls(d)
   local out = {}
   for _, c in ipairs(d:calls()) do
@@ -77,7 +86,7 @@ describe("Панель — наблюдение за терминалом", func
     t.eq(v.seq, 2)
     t.match(s.text(v.buf), "AGENT%-SCREEN")
     -- ввода в панель нет: процесс наблюдения, никаких send_keys и attach
-    t.eq(observe_calls(d), { "terminal session observe w1:p1" })
+    t.eq(observe_calls(d), { observe_cmd(v, "w1:p1") })
     t.eq(requests_except_snapshot(d), {})
     t.eq(vim.api.nvim_get_option_value("modifiable", { buf = v.buf }), false)
   end)
@@ -90,17 +99,18 @@ describe("Панель — наблюдение за терминалом", func
     d:frame("w1:p2", "\r\nbuild ok")
     s.wait_text(v.buf, "build ok", "новый вывод по кадру")
     t.eq(v.kind, "observe")
-    t.eq(observe_calls(d), { "terminal session observe w1:p2" })
+    t.eq(observe_calls(d), { observe_cmd(v, "w1:p2") })
     t.eq(requests_except_snapshot(d), {})
   end)
 
-  it("размер окна берётся из width и height кадра", function()
+  it("размер окна вида кадром не меняется", function()
     local d = env()
     local v = s.track(view.open(model.get("w1:p2")))
+    local width, height = vim.api.nvim_win_get_width(v.win), vim.api.nvim_win_get_height(v.win)
     d:frame("w1:p2", "x", { full = true, width = 100, height = 30 })
     wait_frames(v, 1)
-    t.eq(vim.api.nvim_win_get_width(v.win), 100)
-    t.eq(vim.api.nvim_win_get_height(v.win), 30)
+    t.eq(vim.api.nvim_win_get_width(v.win), width)
+    t.eq(vim.api.nvim_win_get_height(v.win), height)
   end)
 
   it("Закрытие вида", function()
@@ -109,7 +119,7 @@ describe("Панель — наблюдение за терминалом", func
     d:frame("w1:p1", "screen", { full = true })
     wait_frames(v, 1)
     t.ok(s.alive(v.pid), "процесс наблюдения работает")
-    vim.api.nvim_win_close(v.win, true)
+    s.close_win(v)
     s.wait_exit(v, "наблюдение завершено")
     t.ok(not s.alive(v.pid), "процесс наблюдения завершён")
     t.ok(not vim.api.nvim_buf_is_valid(v.buf), "буфер вида удалён")
@@ -178,7 +188,7 @@ describe("Панель — ввод отдельной командой", functi
       local tid = pane.data.terminal_id
       local v = s.track(view.attach(pane))
       s.wait_text(v.buf, "fake herdr: terminal", "экран")
-      vim.api.nvim_win_close(v.win, true)
+      s.close_win(v)
       s.wait_exit(v)
       t.ok(not s.alive(v.pid))
       t.eq(requests_except_snapshot(d), {})

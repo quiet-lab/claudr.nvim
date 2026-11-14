@@ -27,6 +27,15 @@ function M.wait_exit(v, msg)
   end, msg or ("выход процесса " .. tostring(v.pid)))
 end
 
+--- Закрывает окно вида `v` командой редактора: если оно единственное в вкладке, сначала
+--- открывается второе, пустое.
+function M.close_win(v)
+  if #vim.api.nvim_tabpage_list_wins(0) == 1 then
+    vim.cmd("botright new")
+  end
+  vim.api.nvim_win_close(v.win, true)
+end
+
 --- Уборка после теста: виды, модель, клиент, двойник; затем проверка, что своих живых
 --- процессов не осталось.
 function M.reset()
@@ -35,6 +44,7 @@ function M.reset()
   -- процесса зацикливает обработку очереди событий в `vim.wait` и не завершается.
   ts.settle()
   view.close_all()
+  vim.cmd("silent! only")
   ts.reset()
   for _, v in ipairs(M.procs) do
     M.wait_exit(v)

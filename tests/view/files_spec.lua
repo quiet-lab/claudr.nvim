@@ -60,7 +60,7 @@ describe("Субагент — транскрипт по мере записи",
     t.match(text, "Агент:\n  новая реплика субагента")
     t.ok(not text:find('"type"', 1, true), "не сырые строки JSON")
     t.eq(vim.bo[v.buf].modifiable, false)
-    vim.api.nvim_win_close(v.win, true)
+    s.close_win(v)
     t.eq(v.handle, nil, "слежение закрыто вместе с видом")
   end)
 

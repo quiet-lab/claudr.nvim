@@ -62,7 +62,7 @@ end
 function M.open(node, open_pane)
   local buf = window.scratch()
   vim.bo[buf].modifiable = false
-  local win = window.open_float(buf, { title = "панели: " .. (node.label or node.id) })
+  local win = window.open_view(buf, { title = "панели: " .. (node.label or node.id) })
   local v = { kind = "panes", node_id = node.id, buf = buf, win = win, line_ids = {} }
   vim.b[buf].claudr_node_id = node.id
   function v.dispose()
@@ -91,10 +91,11 @@ end
 --- Открывает вид панели на строке `row` перечня `v` (по умолчанию — строка под курсором).
 function M.select(v, row)
   if not row then
-    if not (v.win and vim.api.nvim_win_is_valid(v.win)) then
+    local win = window.win_of(v)
+    if not win then
       return
     end
-    row = vim.api.nvim_win_get_cursor(v.win)[1]
+    row = vim.api.nvim_win_get_cursor(win)[1]
   end
   local id = v.line_ids[row]
   local pane = id and model.get(id)

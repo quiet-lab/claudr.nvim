@@ -34,6 +34,8 @@ local S = {
   -- таймер кадров или nil
   timer = nil,
   augroup = nil,
+  -- окно, из которого открыто дерево: в нём открываются виды узлов (решение D50)
+  origin_win = nil,
 }
 
 ---@class claudr.TreeAction
@@ -867,6 +869,13 @@ end
 function M.open()
   model.start()
   ensure_buf()
+  local from = vim.api.nvim_get_current_win()
+  if
+    vim.api.nvim_win_get_config(from).relative == ""
+    and not (buf_valid() and vim.api.nvim_win_get_buf(from) == S.buf)
+  then
+    S.origin_win = from
+  end
   local win = tree_windows()[1]
   if win then
     vim.api.nvim_set_current_win(win)
@@ -885,6 +894,15 @@ function M.open()
   end
   M.render()
   return win
+end
+
+--- Окно, из которого открыто дерево (последнее обычное окно, где вызвана команда), или nil.
+function M.origin_win()
+  local win = S.origin_win
+  if win and vim.api.nvim_win_is_valid(win) then
+    return win
+  end
+  return nil
 end
 
 --- Закрывает окна дерева текущей вкладки (буфер остаётся).
