@@ -252,7 +252,8 @@ end
 
 --- Подменённый каталог процессов (`claudr.data.proc_dir`): процесс `pid` пишет поток
 --- вывода в `output` и запущен командной строкой оболочки Claude Code с командой
---- `command`. Возвращает функцию возврата прежнего каталога.
+--- `command`. Возвращает функцию возврата прежнего каталога и каталог процесса (его удаление —
+--- завершение процесса).
 function M.fake_proc(output, command, pid)
   local data = require("claudr.data")
   local dir = vim.fn.tempname()
@@ -271,7 +272,7 @@ function M.fake_proc(output, command, pid)
   data.proc_dir = dir
   return function()
     data.proc_dir = prev
-  end
+  end, dir .. "/" .. pid
 end
 
 --- Запись `attachment` `queued_command` с блоком уведомления (доставка посреди хода).

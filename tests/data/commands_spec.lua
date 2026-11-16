@@ -340,7 +340,6 @@ describe("Работающий вызов Bash", function()
       return h:state().calls.bcall0001 ~= nil
     end, "работающий вызов")
     local c = h:state().calls.bcall0001
-    restore()
     t.eq(c.status, "running")
     t.eq(c.output_file, path)
     t.eq(c.command, "make 'all'")
@@ -355,6 +354,51 @@ describe("Работающий вызов Bash", function()
     u.wait(function()
       return h:state().calls.bcall0001 == nil
     end, "вызов завершился")
+    restore()
+    h:close()
+  end)
+
+  it("Процесс не найден", function()
+    local h, _, dir = watch("command-completed")
+    local tasks = fixtures.tasks_dir("command-completed", dir)
+    vim.fn.mkdir(tasks, "p")
+    -- остаток прерванного вызова: файл есть, процесса нет
+    local f = assert(io.open(tasks .. "/bcall0002.output", "w"))
+    f:close()
+    u.settle()
+    t.eq(h:state().calls.bcall0002, nil)
+    h:close()
+  end)
+
+  it("Прерванный вызов", function()
+    local h, changes, dir = watch("command-completed")
+    local tasks = fixtures.tasks_dir("command-completed", dir)
+    vim.fn.mkdir(tasks, "p")
+    local path = tasks .. "/bcall0004.output"
+    local restore, proc = u.fake_proc(path, "sleep 600")
+    local f = assert(io.open(path, "w"))
+    f:close()
+    u.wait(function()
+      return h:state().calls.bcall0004 ~= nil
+    end, "работающий вызов")
+    -- процесс завершён, файл остался; Claude Code дописывает вызов и результат
+    vim.fn.delete(proc, "rf")
+    local n = changes.n
+    local sid = fixtures.session_id("command-completed")
+    fixtures.append(
+      fixtures.transcript("command-completed"),
+      u.bash_call(sid, "toolu_01FixtureCall00000000004", "sleep 600", { interrupted = true })
+    )
+    u.wait(function()
+      return changes.n > n
+    end, "пересчёт по записи транскрипта")
+    restore()
+    t.eq(
+      changes.last.calls.bcall0004,
+      nil,
+      "записи работающего вызова нет"
+    )
+    t.ok(vim.uv.fs_stat(path), "файл остался")
     h:close()
   end)
 
@@ -362,6 +406,7 @@ describe("Работающий вызов Bash", function()
     local h, _, dir = watch("command-completed")
     local tasks = fixtures.tasks_dir("command-completed", dir)
     vim.fn.mkdir(tasks, "p")
+    local restore = u.fake_proc(tasks .. "/bcall0003.output", "make")
     local f = assert(io.open(tasks .. "/bcall0003.output", "w"))
     f:close()
     u.wait(function()
@@ -369,6 +414,7 @@ describe("Работающий вызов Bash", function()
     end, "работающий вызов")
     h:set_owner_alive(false)
     t.eq(h:state().calls.bcall0003.status, "orphaned")
+    restore()
     h:close()
   end)
 
@@ -383,9 +429,16 @@ describe("Работающий вызов Bash", function()
       local f = assert(io.open(child .. "/cmdline", "wb"))
       f:write("make\0")
       f:close()
-      local cmd = data.process_command(out)
+      local cmd, pid = data.process_command(out)
+      t.ok(data.process_alive(pid, out), "процесс жив")
+      t.eq(
+        data.process_alive(pid, out .. ".x"),
+        false,
+        "поток вывода в другой файл"
+      )
       restore()
       t.eq(cmd, "make")
+      t.eq(pid, "5000")
     end
   )
 
@@ -395,12 +448,14 @@ describe("Работающий вызов Bash", function()
     vim.fn.delete(dir .. "/tmp", "rf")
     u.settle()
     vim.fn.mkdir(tasks, "p")
+    local restore = u.fake_proc(tasks .. "/bcall0002.output", "make")
     local f = assert(io.open(tasks .. "/bcall0002.output", "w"))
     f:close()
     u.wait(function()
       return h:state().calls.bcall0002 ~= nil
     end, "вызов в созданном каталоге")
-    t.eq(h:state().calls.bcall0002.command, nil, "процесс не найден")
+    t.eq(h:state().calls.bcall0002.command, "make")
+    restore()
     h:close()
   end)
 

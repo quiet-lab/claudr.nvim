@@ -148,8 +148,9 @@ local function read_proc(path)
   return table.concat(parts)
 end
 
---- Команда вызова Bash, пишущего в файл `path`: командная строка процесса оболочки, у
---- которого поток вывода направлен в этот файл (Linux, `/proc`). nil — процесс не найден.
+--- Команда и номер процесса вызова Bash, пишущего в файл `path`: командная строка процесса
+--- оболочки, у которого поток вывода направлен в этот файл (Linux, `/proc`). nil — процесс не
+--- найден.
 function M.process_command(path)
   local fd = uv.fs_scandir(M.proc_dir)
   if not fd then
@@ -167,11 +168,17 @@ function M.process_command(path)
         local raw = read_proc(base .. "/cmdline")
         local cmd = raw and M.eval_command((raw:gsub("%z", " ")))
         if cmd then
-          return cmd
+          return cmd, name
         end
       end
     end
   end
+end
+
+--- Жив ли процесс `pid` и направлен ли его поток вывода по-прежнему в файл `path`
+--- (проверка по событию, не опрос).
+function M.process_alive(pid, path)
+  return pid ~= nil and uv.fs_readlink(M.proc_dir .. "/" .. pid .. "/fd/1") == path
 end
 
 --- Каталог проекта сессии (каталог, где лежит её транскрипт) или nil.

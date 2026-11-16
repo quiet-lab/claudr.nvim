@@ -6,8 +6,10 @@
 --   * subagents/ — meta.json и транскрипты субагентов (посторонние файлы и каталоги
 --     пропускаются);
 --   * каталог задач сессии (claudr.data.tasks_dir) — появление и удаление файлов вывода:
---     обычный файл, не принадлежащий фоновой команде, — работающий вызов Bash; пока
---     каталога нет, наблюдается ближайший существующий предок (claudr.data.fs.wait_path).
+--     обычный файл, не принадлежащий фоновой команде, в который пишет живой процесс
+--     оболочки, — работающий вызов Bash (решение D66: процесс проверяется при каждом
+--     пересчёте по событию, без опроса); пока каталога нет, наблюдается ближайший
+--     существующий предок (claudr.data.fs.wait_path).
 -- Транскрипты читаются асинхронно порциями (claudr.data.fs.read_lines_async) по одному
 -- файлу за раз: главный поток Neovim не ждёт чтения больших файлов. Уведомление,
 -- пришедшее во время чтения файла, вызывает ещё одно чтение этого файла после текущего.
@@ -38,7 +40,7 @@ function M.new(data, session_id, on_change)
     running = nil, -- идущее чтение
     loading = false, -- первое чтение транскриптов после присоединения не закончено
     task_files = {}, -- имя файла каталога задач → true, если обычный файл есть
-    live = {}, -- id задачи → работающий вызов Bash {id, output_file, command}
+    live = {}, -- id задачи → файл вызова Bash {id, output_file, command, pid, gone}
     tries = {}, -- id задачи → число попыток найти команду работающего вызова
   }, Session)
   local path = data.find_transcript(session_id)
@@ -105,7 +107,8 @@ function Session:_tasks_ready()
 end
 
 -- Попыток найти процесс работающего вызова: при появлении файла процесс может ещё не
--- открыть его, поэтому поиск повторяется по следующим уведомлениям о файле.
+-- открыть его, поэтому поиск повторяется по следующим уведомлениям о файле. Файл без
+-- найденного процесса (остаток прерванного вызова) записи не даёт.
 local COMMAND_TRIES = 3
 
 -- Изменение файла `name` каталога задач; true — состояние изменилось. Уведомление о
@@ -132,14 +135,16 @@ function Session:_task_file(name)
     call = { id = id, output_file = path }
     self.live[id] = call
   end
-  -- команда работающего вызова ещё не найдена: перестроение состояния ищет её снова
+  -- процесс ещё не найден: перестроение состояния ищет его снова; дописывание файла с уже
+  -- найденным процессом пересчёта не вызывает
   return changed or self:_wants_command(id)
 end
 
 function Session:_wants_command(id)
   local call = self.live[id]
   return call ~= nil
-    and not call.command
+    and not call.pid
+    and not call.gone
     and not self.ledger.commands[id]
     and (self.tries[id] or 0) < COMMAND_TRIES
 end
@@ -311,10 +316,15 @@ function Session:_compute()
     -- файл фоновой команды до записи о ней в транскрипте — тоже обычный файл задачи
     if self:_wants_command(id) then
       self.tries[id] = (self.tries[id] or 0) + 1
-      local ok, cmd = pcall(self.data.process_command, call.output_file)
-      call.command = ok and cmd or nil
+      local ok, cmd, pid = pcall(self.data.process_command, call.output_file)
+      if ok and cmd then
+        call.command, call.pid = cmd, pid
+      end
+    elseif call.pid and not self.data.process_alive(call.pid, call.output_file) then
+      -- процесс завершился, файл остался (прерванный вызов): записи больше нет
+      call.pid, call.gone = nil, true
     end
-    if not self.ledger.commands[id] then
+    if call.pid and not self.ledger.commands[id] then
       s.calls[id] = {
         id = id,
         output_file = call.output_file,
