@@ -144,6 +144,10 @@ function M.run_all()
   local function walk(suite)
     for _, test in ipairs(suite.tests) do
       local name = full_name(suite, test.name)
+      if os.getenv("CLAUDR_TEST_TRACE") then
+        -- ход прогона сразу в stderr: вывод print копится до конца процесса
+        io.stderr:write("начат: " .. name .. "\n")
+      end
       local ok, err = run_test(suite, test)
       if ok then
         passed = passed + 1
