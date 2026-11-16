@@ -10,6 +10,9 @@ local double = s.double
 
 local rec
 
+-- Строки панелей с агентом есть только у прочих агентов вкладки: тесты значков состояний
+-- ставят в фокус агента вкладки `w1:p0`, чтобы `w1:p1` была строкой прочего агента.
+
 before_each(function()
   icons = s.stub_icons()
   rec = s.timer_recorder()
@@ -81,23 +84,29 @@ end
 
 describe("Значки узлов", function()
   it("Панель с агентом", function()
-    s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed", { agent_status = "idle" }) }))
+    -- вторая вкладка: единственная вкладка строки не имеет
+    s.env({
+      workspaces = { ws({ workspace_id = "w1", label = "ws1" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", label = "main", agent_status = "idle" }),
+        double.tab({ tab_id = "w1:t2" }),
+      },
+      panes = {
+        s.claude_pane("w1:p1", "owner-killed", { agent_status = "idle" }),
+        double.pane({ pane_id = "w1:p2", tab_id = "w1:t2" }),
+      },
+    })
     view.open()
-    wait_line("w1:p1")
-    local ic = view._icon("w1:p1")
+    wait_line("w1:t1")
+    t.eq(view.line_of("w1:p1"), nil, "строки панели агента вкладки нет")
+    local ic = view._icon("w1:t1")
     t.eq(ic.text, "i")
     t.eq(ic.hl, "DiagnosticOk")
     t.eq(ic.pos, "inline")
-    -- панель без детей под workspace (единственная вкладка схлопнута): отступ, место знака
-    -- свёртки и пробел
+    -- вкладка без детей: отступ, место знака свёртки и пробел
     t.eq(ic.col, #"    ", "значок в начале строки узла")
-    -- знак панели с агентом — символ workspace, как в строке агента herdr
-    t.eq(line("w1:p1"), "    S opus задача w1:p1")
-    t.eq(
-      line("w1:p1"):find(" A ", 1, true),
-      nil,
-      "буквенного обозначения нет"
-    )
+    -- за значком подпись без знака вида
+    t.eq(line("w1:t1"), "    main")
   end)
 
   it("Субагент и команда", function()
@@ -113,6 +122,15 @@ describe("Значки узлов", function()
     view.open()
     local a = s.wait_node("w1:p1/a0000000000000005")
     local c = s.wait_node("w1:p2/bfixt0005")
+    -- работающий вызов Bash агента вкладки
+    local tasks = s.fixtures.tasks_dir("owner-killed", s.claude_dir)
+    vim.fn.mkdir(tasks, "p")
+    local f = assert(io.open(tasks .. "/bcall0001.output", "w"))
+    f:close()
+    local b = s.wait_node("w1:p1/bcall0001")
+    wait_line(b.id)
+    t.match(view._icon(b.id).text, "^w%d$", "значок working у вызова")
+    t.match(line(b.id), "🐚 Bash$")
     t.eq(a.state, "running")
     t.eq(c.state, "finished")
     wait_line(a.id)
@@ -145,24 +163,25 @@ describe("Значки узлов", function()
     end
   )
 
-  it(
-    "панель с агентом в workspace без символа — знак 🧠",
-    function()
-      s.env({
-        workspaces = { ws({ workspace_id = "w1", label = "demo", tokens = false }) },
-        tabs = { double.tab({ tab_id = "w1:t1" }) },
-        panes = { double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "idle" }) },
-      })
-      view.open()
-      wait_line("w1:p1")
-      t.match(line("w1:p1"), "^    🧠 ")
-      t.eq(
-        view._icon("w1:p1").col,
-        #"    ",
-        "знак вида сразу после значка состояния"
-      )
-    end
-  )
+  it("прочий агент в workspace без символа — знак 🧠", function()
+    s.env({
+      workspaces = { ws({ workspace_id = "w1", label = "demo", tokens = false }) },
+      tabs = { double.tab({ tab_id = "w1:t1" }) },
+      panes = {
+        double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "idle" }),
+        double.pane({ pane_id = "w1:p2", agent = "codex", agent_status = "idle" }),
+      },
+    })
+    view.open()
+    wait_line("w1:p2")
+    t.eq(view.line_of("w1:p1"), nil)
+    t.match(line("w1:p2"), "^    🧠 ")
+    t.eq(
+      view._icon("w1:p2").col,
+      #"    ",
+      "знак вида сразу после значка состояния"
+    )
+  end)
 
   it("Состояния нет", function()
     local tab = double.tab({ tab_id = "w1:t1", label = "main" })
@@ -179,7 +198,8 @@ describe("Значки узлов", function()
     view.open()
     wait_line("w1:t1")
     t.eq(view._icon("w1:t1"), nil)
-    t.match(line("w1:t1"), "^  ▾ main$")
+    -- агент вкладки своей строки не имеет: у вкладки нет детей
+    t.match(line("w1:t1"), "^    main$")
   end)
 
   it("состояние вкладки — из снимка", function()
@@ -227,14 +247,11 @@ describe("Подписи workspace и вкладок", function()
     view.open()
     wait_line("w1:p2")
     t.match(line("w1"), "^▾ S1 demo$")
-    -- единственная вкладка своей строки не имеет: окраска проверена по модели
-    -- у панели с агентом подпись идёт после знака вида (символа workspace)
-    for _, id in ipairs({ "w1", "w1:p1" }) do
-      local col = #line(id):match(id == "w1:p1" and "^[%s▾▸]* S1 " or "^[%s▾▸]* ")
-      local group = hl_at(id, col)
-      t.ok(group, "подпись окрашена: " .. id)
-      t.eq(hl_fg(group), "#336699")
-    end
+    -- единственная вкладка и агент вкладки своих строк не имеют: окраска проверена по модели
+    local col = #line("w1"):match("^[%s▾▸]* ")
+    local group = hl_at("w1", col)
+    t.ok(group, "подпись окрашена")
+    t.eq(hl_fg(group), "#336699")
   end)
 
   it("Подпись вкладки по правилу herdr", function()
@@ -345,9 +362,8 @@ describe("Подписи workspace и вкладок", function()
     t.eq(s.wait_node("w1").color, nil)
     t.eq(model.get("w1:p1").color, nil)
     view.open()
-    wait_line("w1:p1")
+    wait_line("w1")
     t.eq(colored("w1"), false)
-    t.eq(colored("w1:p1"), false)
   end)
 end)
 
@@ -361,6 +377,7 @@ describe("Значки состояний", function()
       unknown = { frames = { "u" }, period = 400 },
     })
     s.env(s.snapshot({
+      double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
       double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "working" }),
       double.pane({ pane_id = "w1:p2", agent = "codex", agent_status = "blocked" }),
     }))
@@ -374,7 +391,13 @@ describe("Значки состояний", function()
   end)
 
   it("Состояние done", function()
-    local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+    local d = s.env(
+      s.snapshot({
+        double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+        s.claude_pane("w1:p1", "owner-killed"),
+      }),
+      "owner-killed"
+    )
     view.open()
     wait_line("w1:p1")
     d:set_agent_status("w1:p1", "done")
@@ -391,7 +414,13 @@ describe("Значки состояний", function()
   end)
 
   it("Состояние субагента", function()
-    local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+    local d = s.env(
+      s.snapshot({
+        double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+        s.claude_pane("w1:p1", "owner-killed"),
+      }),
+      "owner-killed"
+    )
     view.open()
     s.wait_node("w1:p1/a0000000000000005")
     d:pane_exited("w1:p1")
@@ -406,7 +435,13 @@ describe("Значки состояний", function()
   end)
 
   it("Неизвестное значение", function()
-    local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+    local d = s.env(
+      s.snapshot({
+        double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+        s.claude_pane("w1:p1", "owner-killed"),
+      }),
+      "owner-killed"
+    )
     view.open()
     wait_line("w1:p1")
     d:set_agent_status("w1:p1", "paused")
@@ -418,7 +453,13 @@ describe("Значки состояний", function()
   it(
     "смена значков в конфигурации herdr перерисовывает дерево",
     function()
-      s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+      s.env(
+        s.snapshot({
+          double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+          s.claude_pane("w1:p1", "owner-killed"),
+        }),
+        "owner-killed"
+      )
       view.open()
       wait_line("w1:p1")
       t.eq(view._icon("w1:p1").text, "i")
@@ -438,13 +479,17 @@ describe("Режим без значков", function()
         ws({ workspace_id = "w1", label = "demo", tokens = { symbol = "S1", color = "#336699" } }),
       },
       tabs = { double.tab({ tab_id = "w1:t1", label = "main" }) },
-      panes = { double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "working" }) },
+      panes = {
+        double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+        double.pane({ pane_id = "w1:p1", agent = "codex", agent_status = "working" }),
+      },
     })
     view.open()
     wait_line("w1:p1")
     t.eq(line("w1:p1"), "      A haiku [working]")
     t.eq(line("w1"), "▾ W demo")
-    t.eq(line("w1:t1"), "  ▾ T main")
+    t.eq(line("w1:t1"), "  ▾ T main [unknown]")
+    t.eq(view.line_of("w1:p0"), nil, "строки агента вкладки нет")
     t.eq(view._icon("w1:p1"), nil, "значка нет")
     t.eq(colored("w1"), false, "цвета workspace нет")
     t.eq(colored("w1:p1"), false)
@@ -455,7 +500,13 @@ describe("Режим без значков", function()
 
   it("Режим по умолчанию", function()
     t.eq(config.get().icons, "herdr")
-    s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+    s.env(
+      s.snapshot({
+        double.pane({ pane_id = "w1:p0", agent = "codex", focused = true }),
+        s.claude_pane("w1:p1", "owner-killed"),
+      }),
+      "owner-killed"
+    )
     view.open()
     wait_line("w1:p1")
     t.eq(view._icon("w1:p1").text, "i")

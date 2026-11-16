@@ -178,24 +178,22 @@ describe(
     end)
 
     it(
-      "перечень панелей и вид выбранной панели — в том же окне",
+      "Enter на вкладке — наблюдение за агентом вкладки одним буфером",
       function()
         env()
         local win_a = open_tree("w1:t1")
+        local wins = #vim.api.nvim_tabpage_list_wins(0)
         press("<CR>")
-        local pv = view.views()[1]
-        t.eq(pv.kind, "panes")
-        t.eq(vim.api.nvim_win_get_buf(win_a), pv.buf)
-        vim.api.nvim_win_set_cursor(win_a, { 2, 0 })
-        press("<CR>")
-        local ov
-        for _, x in ipairs(view.views()) do
-          if x.kind == "observe" then
-            ov = s.track(x)
-          end
-        end
-        t.ok(ov, "вид панели открыт")
+        local ov = s.track(view.views()[1])
+        t.eq(#view.views(), 1, "один вид")
+        t.eq(ov.kind, "observe")
+        t.eq(ov.node_id, "w1:p1", "агент вкладки")
         t.eq(vim.api.nvim_win_get_buf(win_a), ov.buf)
+        t.eq(
+          #vim.api.nvim_tabpage_list_wins(0),
+          wins,
+          "раскладка окон не меняется"
+        )
         t.eq(floats(), {})
       end
     )

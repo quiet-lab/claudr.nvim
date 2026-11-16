@@ -1,9 +1,10 @@
--- Подключение к узлам дерева (спецификация node-view, решения D4, D18, D20).
+-- Подключение к узлам дерева (спецификация node-view, решения D4, D18, D61, D62).
 --
 -- Вид определяется видом узла: панель (с агентом и с командой одинаково) — наблюдение за
--- терминалом, субагент — транскрипт, фоновая команда — файл вывода, workspace и вкладка —
--- перечень панелей. Подключение к панели с вводом и прокрутка её истории — отдельные
--- явные действия. Действия регистрируются в дереве, подкоманды — в `setup()`.
+-- терминалом, вкладка и workspace — наблюдение за терминалом агента вкладки (без агента —
+-- панели в фокусе), субагент — транскрипт, фоновая команда — файл вывода, вызов Bash — его
+-- вывод. Подключение к панели с вводом и прокрутка её истории — отдельные явные действия.
+-- Действия регистрируются в дереве, подкоманды — в `setup()`.
 local commands = require("claudr.commands")
 local model = require("claudr.tree.model")
 local window = require("claudr.view.window")
@@ -13,8 +14,16 @@ local M = {}
 -- Клавиши действий в окне дерева и в видах.
 M.KEYS = { open = "<CR>", attach = "i", scrollback = "S" }
 
+-- Панель строки: у вкладки и workspace — агент вкладки, без него панель в фокусе.
+local function pane_of(node)
+  if node and (node.kind == "tab" or node.kind == "workspace") then
+    return model.pane_node(node)
+  end
+  return node
+end
+
 local function pane_only(node, what)
-  if node.kind ~= "pane" then
+  if not node or node.kind ~= "pane" then
     vim.notify("claudr: " .. what .. " — только для панели", vim.log.levels.WARN)
     return false
   end
@@ -77,14 +86,22 @@ end
 --- Открывает вид узла по его виду. Возвращает вид или nil.
 function M.open(node)
   local v
+  if node.kind == "tab" or node.kind == "workspace" then
+    local pane = pane_of(node)
+    if not pane then
+      vim.notify("claudr: во вкладке нет панелей", vim.log.levels.WARN)
+      return nil
+    end
+    node = pane
+  end
   if node.kind == "pane" then
     v = require("claudr.view.observe").open(node)
   elseif node.kind == "subagent" then
     v = require("claudr.view.files").open_subagent(node)
   elseif node.kind == "task" then
     v = require("claudr.view.files").open_task(node)
-  elseif node.kind == "workspace" or node.kind == "tab" then
-    v = require("claudr.view.panes").open(node, M.open)
+  elseif node.kind == "bash" then
+    v = require("claudr.view.files").open_bash(node)
   else
     vim.notify(
       "claudr: неизвестный вид узла " .. tostring(node.kind),
@@ -97,6 +114,7 @@ end
 
 --- Подключение к панели с вводом; `opts.takeover` — с вытеснением другого клиента.
 function M.attach(node, opts)
+  node = pane_of(node)
   if not pane_only(node, "подключение с вводом") then
     return nil
   end
@@ -105,6 +123,7 @@ end
 
 --- История панели через `pane.read`.
 function M.scrollback(node)
+  node = pane_of(node)
   if not pane_only(node, "история") then
     return nil
   end

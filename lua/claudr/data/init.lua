@@ -52,6 +52,128 @@ function M.find_transcript(session_id)
   return nil
 end
 
+--- Временный каталог Claude Code: `$CLAUDR_CLAUDE_TMP`, без неё — `claude-<uid>` во
+--- временном каталоге системы.
+function M.tmp_root()
+  local dir = uv.os_getenv("CLAUDR_CLAUDE_TMP")
+  if not dir or dir == "" then
+    dir = (uv.os_tmpdir() or "/tmp") .. "/claude-" .. tostring(uv.getuid())
+  end
+  return (dir:gsub("(.)/+$", "%1"))
+end
+
+--- Каталог задач сессии по пути её транскрипта: `<временный каталог>/<имя каталога
+--- проекта>/<сессия>/tasks`. В нём лежат файлы вывода вызовов Bash сессии и её субагентов.
+function M.tasks_dir(transcript)
+  local project = fs.basename(fs.dirname(transcript))
+  local session = fs.basename(transcript):gsub("%.jsonl$", "")
+  return M.tmp_root() .. "/" .. project .. "/" .. session .. "/tasks"
+end
+
+-- Слово оболочки, начинающееся с позиции `i` строки `s`: склеенные части в одинарных и
+-- двойных кавычках и без кавычек до пробела. Возвращает текст слова без кавычек.
+local function shell_word(s, i)
+  local out = {}
+  local n = #s
+  while i <= n do
+    local c = s:sub(i, i)
+    if c == "'" then
+      local j = s:find("'", i + 1, true)
+      if not j then
+        out[#out + 1] = s:sub(i + 1)
+        break
+      end
+      out[#out + 1] = s:sub(i + 1, j - 1)
+      i = j + 1
+    elseif c == '"' then
+      local j = i + 1
+      local part = {}
+      while j <= n do
+        local d = s:sub(j, j)
+        if d == "\\" and j < n then
+          part[#part + 1] = s:sub(j + 1, j + 1)
+          j = j + 2
+        elseif d == '"' then
+          break
+        else
+          part[#part + 1] = d
+          j = j + 1
+        end
+      end
+      out[#out + 1] = table.concat(part)
+      i = j + 1
+    elseif c:match("%s") then
+      break
+    else
+      out[#out + 1] = c
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
+--- Команда вызова Bash из командной строки оболочки Claude Code (`… && eval '<команда>'
+--- && …`) или nil.
+function M.eval_command(cmdline)
+  if type(cmdline) ~= "string" then
+    return nil
+  end
+  local i = cmdline:find("eval '", 1, true)
+  if not i then
+    return nil
+  end
+  local cmd = shell_word(cmdline, i + 5)
+  return cmd ~= "" and cmd or nil
+end
+
+-- Каталог процессов: подменяется в тестах.
+M.proc_dir = "/proc"
+
+-- Файл каталога процессов целиком: размер у таких файлов — 0, читается до конца порциями.
+local function read_proc(path)
+  local fd = uv.fs_open(path, "r", 438)
+  if not fd then
+    return nil
+  end
+  local parts, offset = {}, 0
+  while true do
+    local chunk = uv.fs_read(fd, 65536, offset)
+    if not chunk or chunk == "" then
+      break
+    end
+    parts[#parts + 1] = chunk
+    offset = offset + #chunk
+  end
+  uv.fs_close(fd)
+  return table.concat(parts)
+end
+
+--- Команда вызова Bash, пишущего в файл `path`: командная строка процесса оболочки, у
+--- которого поток вывода направлен в этот файл (Linux, `/proc`). nil — процесс не найден.
+function M.process_command(path)
+  local fd = uv.fs_scandir(M.proc_dir)
+  if not fd then
+    return nil
+  end
+  while true do
+    local name = uv.fs_scandir_next(fd)
+    if not name then
+      return nil
+    end
+    if name:match("^%d+$") then
+      local base = M.proc_dir .. "/" .. name
+      -- поток вывода наследуют и дочерние процессы команды: нужен процесс оболочки с `eval`
+      if uv.fs_readlink(base .. "/fd/1") == path then
+        local raw = read_proc(base .. "/cmdline")
+        local cmd = raw and M.eval_command((raw:gsub("%z", " ")))
+        if cmd then
+          return cmd
+        end
+      end
+    end
+  end
+end
+
 --- Каталог проекта сессии (каталог, где лежит её транскрипт) или nil.
 function M.project_dir(session_id)
   local path = M.find_transcript(session_id)
@@ -369,11 +491,11 @@ function M.watch_session(session_id, on_change)
   return require("claudr.data.session").new(M, session_id, on_change)
 end
 
---- Следит за файлом вывода фоновой команды: `on_text(chunk)` получает сначала уже записанное
---- (асинхронно, порциями), затем дописанные куски с запомненного смещения. Файла нет —
---- `nil, "unavailable"` (каталог временный; статус и код выхода по-прежнему даёт
---- watch_session).
-function M.watch_output(path, on_text)
+--- Следит за файлом вывода фоновой команды или вызова Bash: `on_text(chunk)` получает сначала
+--- уже записанное (асинхронно, порциями), затем дописанные куски с запомненного смещения;
+--- `on_gone()` — один раз, когда файл удалён. Файла нет — `nil, "unavailable"` (каталог
+--- временный; статус и код выхода по-прежнему даёт watch_session).
+function M.watch_output(path, on_text, on_gone)
   if type(path) ~= "string" or not fs.is_file(path) then
     return nil, "unavailable"
   end
@@ -402,6 +524,12 @@ function M.watch_output(path, on_text)
   -- наблюдается сам файл: вывод фонового субагента — символьная ссылка на его транскрипт,
   -- уведомления приходят по файлу, на который она указывает
   h.watch = fs.watch(path, function()
+    if on_gone and not h.gone and not uv.fs_stat(path) then
+      -- файл удалён: вызов Bash не в фоне завершился, временный каталог очищен
+      h.gone = true
+      on_gone()
+      return
+    end
     pump()
   end)
   function h:close()

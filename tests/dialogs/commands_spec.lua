@@ -48,6 +48,17 @@ describe("Открытие буфера диалога", function()
     t.ok(buffer.current())
   end)
 
+  it(
+    "Действие дерева на строке вкладки — запрос агента вкладки",
+    function()
+      env()
+      require("claudr").setup()
+      ds.add(pending, "permission-bash")
+      view.action("dialog").run(model.get("w1:t1"))
+      t.ok(buffer.current())
+    end
+  )
+
   it("Запроса нет: сообщение", function()
     env()
     require("claudr").setup()

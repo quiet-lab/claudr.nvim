@@ -110,6 +110,21 @@ local function pick_pane(opts, node, cb)
     cb(node.id, node.label or node.id)
     return
   end
+  if node and node.kind == "tab" then
+    -- строка вкладки адресуется агенту вкладки; без агента сообщение не отправляется
+    local agent = model.agent_node(node)
+    if not agent then
+      notify("claudr: во вкладке нет агента", vim.log.levels.WARN)
+      return
+    end
+    cb(agent.id, agent.label or agent.id)
+    return
+  end
+  if node and node.kind == "workspace" and node.agent_pane then
+    local agent = model.agent_node(node)
+    cb(agent.id, agent.label or agent.id)
+    return
+  end
   local panes = agent_panes(node)
   if #panes == 0 then
     notify("claudr: нет панелей с агентом", vim.log.levels.WARN)

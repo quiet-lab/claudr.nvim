@@ -249,6 +249,11 @@ local function select_pane(field, id, cb)
     notify("claudr: нет панелей для деления", vim.log.levels.WARN)
     return
   end
+  if field == "tab_id" and #panes == 1 then
+    -- единственная панель вкладки выбирается без вопроса
+    cb(panes[1].pane_id)
+    return
+  end
   select(panes, "Панель для деления:", function(p)
     local what = present(p.agent) and p.agent or tostring(p.foreground_process)
     return ("%s / %s (%s)"):format(tabs[p.tab_id] or p.tab_id, p.pane_id, what)

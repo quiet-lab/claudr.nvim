@@ -1,5 +1,6 @@
--- Ждущие запросы в дереве (agent-tree, «Состояние панели с агентом»): узел показывает число
--- своих запросов, узел панели — и запросов субагентов; перерисовка по подписке перечня.
+-- Ждущие запросы в дереве (agent-tree, «Ждущие запросы вкладки»): узел показывает число
+-- своих запросов, строка агента вкладки — и запросов субагентов; перерисовка по подписке
+-- перечня.
 local t = require("helpers.t")
 local ds = require("dialogs.support")
 local s = ds.ms.tree
@@ -31,12 +32,16 @@ local function env()
 end
 
 local function line(id)
+  if id == "w1:p1" then
+    -- агент вкладки своей строки не имеет; единственная вкладка показана строкой workspace
+    id = view.line_of("w1:t1") and "w1:t1" or "w1"
+  end
   return view.lines()[view.line_of(id)]
 end
 
--- Идентификатор первого субагента панели w1:p1 в дереве.
+-- Идентификатор первого субагента агента вкладки w1:t1 в дереве.
 local function subagent_id()
-  for _, cid in ipairs(model.get("w1:p1").children) do
+  for _, cid in ipairs(model.get("w1:t1").children) do
     if model.get(cid).kind == "subagent" then
       return cid
     end
@@ -49,11 +54,7 @@ describe("Ждущие запросы", function()
     t.eq(line("w1:p1"):find("ждут", 1, true), nil, "без запросов числа нет")
     ds.add(pending, "permission-bash")
     ds.add(pending, "permission-read")
-    t.match(
-      line("w1:p1"),
-      "opus задача w1:p1 %[ждут: 2%]$",
-      "число после подписи"
-    )
+    t.match(line("w1:p1"), "ws1 %[ждут: 2%]$", "число после подписи")
   end)
 
   it("Субагент и главная сессия", function()

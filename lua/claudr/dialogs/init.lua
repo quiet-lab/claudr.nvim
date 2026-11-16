@@ -18,27 +18,27 @@ local function pending()
   return ok and p or nil
 end
 
--- Ждущие запросы узла; для workspace и вкладки — запросы всех панелей внутри.
+-- Ждущие запросы узла: строка вкладки — агента вкладки (с его субагентами), workspace с одной
+-- вкладкой — так же, workspace с несколькими вкладками — всех панелей с агентом внутри.
 local function requests_for(node)
   local p = pending()
   if not p then
     return {}
   end
-  if node.kind == "pane" or node.kind == "subagent" then
-    return p.for_node(node)
+  local agent = model.agent_node(node)
+  if agent then
+    return p.for_node(agent)
+  end
+  if node.kind ~= "workspace" then
+    return {}
   end
   local out = {}
-  local function walk(n)
-    for _, cid in ipairs(n.children or {}) do
-      local c = model.get(cid)
-      if c and c.kind == "pane" then
-        vim.list_extend(out, p.for_node(c))
-      elseif c then
-        walk(c)
-      end
+  for _, pane in ipairs(model.agent_panes()) do
+    local ws = pane.data and pane.data.workspace_id
+    if ws == node.id then
+      vim.list_extend(out, p.for_node(pane))
     end
   end
-  walk(node)
   return out
 end
 

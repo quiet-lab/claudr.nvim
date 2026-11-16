@@ -4,7 +4,10 @@
 --   * каталог проекта — дописывание транскрипта владельца и появление каталога сессии;
 --   * каталог сессии — пока нет subagents/; когда он создан, наблюдение переходит на него;
 --   * subagents/ — meta.json и транскрипты субагентов (посторонние файлы и каталоги
---     пропускаются).
+--     пропускаются);
+--   * каталог задач сессии (claudr.data.tasks_dir) — появление и удаление файлов вывода:
+--     обычный файл, не принадлежащий фоновой команде, — работающий вызов Bash; пока
+--     каталога нет, наблюдается ближайший существующий предок (claudr.data.fs.wait_path).
 -- Транскрипты читаются асинхронно порциями (claudr.data.fs.read_lines_async) по одному
 -- файлу за раз: главный поток Neovim не ждёт чтения больших файлов. Уведомление,
 -- пришедшее во время чтения файла, вызывает ещё одно чтение этого файла после текущего.
@@ -34,6 +37,9 @@ function M.new(data, session_id, on_change)
     queued = {}, -- путь → чтение в очереди
     running = nil, -- идущее чтение
     loading = false, -- первое чтение транскриптов после присоединения не закончено
+    task_files = {}, -- имя файла каталога задач → true, если обычный файл есть
+    live = {}, -- id задачи → работающий вызов Bash {id, output_file, command}
+    tries = {}, -- id задачи → число попыток найти команду работающего вызова
   }, Session)
   local path = data.find_transcript(session_id)
   if path then
@@ -72,6 +78,83 @@ function Session:_attach(path)
   end)
   self:_read_owner()
   self:_session_dir_changed()
+  self.tasks_dir = self.data.tasks_dir(path)
+  self.tasks_wait = fs.wait_path(self.tasks_dir, function()
+    self:_tasks_ready()
+  end)
+end
+
+-- Каталог задач появился: наблюдение за ним и разбор уже лежащих файлов.
+function Session:_tasks_ready()
+  if self.closed or self.tasks_watch then
+    return
+  end
+  self.tasks_watch = fs.watch(self.tasks_dir, function(filename)
+    if filename == nil then
+      self:_scan_tasks()
+      self:_emit()
+    elseif self:_task_file(filename) then
+      self:_emit()
+    end
+  end)
+  self:_scan_tasks()
+  -- при создании сессии (каталог уже есть) состояние считает конструктор
+  if self.last ~= nil then
+    self:_emit()
+  end
+end
+
+-- Попыток найти процесс работающего вызова: при появлении файла процесс может ещё не
+-- открыть его, поэтому поиск повторяется по следующим уведомлениям о файле.
+local COMMAND_TRIES = 3
+
+-- Изменение файла `name` каталога задач; true — состояние изменилось. Уведомление о
+-- дописывании известного файла состояния не меняет и обходится одной проверкой.
+function Session:_task_file(name)
+  local id = name:match("^(.+)%.output$")
+  if not id then
+    return false
+  end
+  local path = self.tasks_dir .. "/" .. name
+  local st = vim.uv.fs_lstat(path)
+  local regular = st ~= nil and st.type == "file"
+  if not regular then
+    local known = self.task_files[name] ~= nil
+    self.task_files[name] = nil
+    self.live[id] = nil
+    self.tries[id] = nil
+    return known
+  end
+  local changed = not self.task_files[name]
+  self.task_files[name] = true
+  local call = self.live[id]
+  if not call then
+    call = { id = id, output_file = path }
+    self.live[id] = call
+  end
+  -- команда работающего вызова ещё не найдена: перестроение состояния ищет её снова
+  return changed or self:_wants_command(id)
+end
+
+function Session:_wants_command(id)
+  local call = self.live[id]
+  return call ~= nil
+    and not call.command
+    and not self.ledger.commands[id]
+    and (self.tries[id] or 0) < COMMAND_TRIES
+end
+
+function Session:_scan_tasks()
+  local seen = {}
+  for _, e in ipairs(fs.list_dir(self.tasks_dir)) do
+    seen[e.name] = true
+    self:_task_file(e.name)
+  end
+  for name in pairs(self.task_files) do
+    if not seen[name] then
+      self:_task_file(name)
+    end
+  end
 end
 
 -- Поставить чтение файла `key` (читатель `tail`, владелец `owner`) в очередь. Файл уже
@@ -220,11 +303,42 @@ end
 function Session:_compute()
   local s = parse.build(self.ledger, self.metas, self.paired, self.owner_alive)
   s.transcript = self.transcript
+  for _, task in pairs(s.tasks) do
+    -- вывод есть, пока лежит файл (временный каталог могли очистить)
+    task.output_available = task.output_file ~= nil and fs.is_file(task.output_file)
+  end
+  for id, call in pairs(self.live) do
+    -- файл фоновой команды до записи о ней в транскрипте — тоже обычный файл задачи
+    if self:_wants_command(id) then
+      self.tries[id] = (self.tries[id] or 0) + 1
+      local ok, cmd = pcall(self.data.process_command, call.output_file)
+      call.command = ok and cmd or nil
+    end
+    if not self.ledger.commands[id] then
+      s.calls[id] = {
+        id = id,
+        output_file = call.output_file,
+        command = call.command,
+        status = self.owner_alive and "running" or "orphaned",
+      }
+    end
+  end
   return s
 end
 
---- Состояние сессии: `{ transcript = путь|nil, subagents = {[id] = …}, tasks = {[id] = …} }`
---- (форма записей — claudr.data.parse.build). Пока идёт чтение транскриптов — последнее
+--- Вывод завершённого вызова Bash `id`: `{ text, persisted }` или nil.
+function Session:call_output(id)
+  local c = self.ledger.calls[id]
+  if not c then
+    return nil
+  end
+  return { text = self.ledger.outputs[id] or "", persisted = c.persisted }
+end
+
+--- Состояние сессии: `{ transcript = путь|nil, subagents = {[id] = …}, tasks = {[id] = …},
+--- calls = {[id] = …} }` (форма записей — claudr.data.parse.build; у фоновой команды ещё
+--- `output_available`; работающий вызов Bash — `{id, output_file, command, status}` по
+--- идентификатору задачи, завершённый — по идентификатору вызова). Пока идёт чтение транскриптов — последнее
 --- согласованное состояние (до конца первого чтения — без субагентов и команд).
 function Session:state()
   if self:_busy() then
@@ -250,7 +364,14 @@ function Session:close()
     return
   end
   self.closed = true
-  for _, k in ipairs({ "locator", "project_watch", "session_watch", "sub_watch" }) do
+  for _, k in ipairs({
+    "locator",
+    "project_watch",
+    "session_watch",
+    "sub_watch",
+    "tasks_wait",
+    "tasks_watch",
+  }) do
     if self[k] then
       self[k].close()
       self[k] = nil

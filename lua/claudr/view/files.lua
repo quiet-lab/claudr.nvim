@@ -1,6 +1,7 @@
--- Виды узлов из файлов Claude Code (спецификация node-view, решение D18): транскрипт
--- субагента репликами диалога и файл вывода фоновой команды. Оба только для чтения;
--- дополнения приходят по уведомлениям файловой системы модуля данных, таймеров нет.
+-- Виды узлов из файлов Claude Code (спецификация node-view, решения D18, D62): транскрипт
+-- субагента репликами диалога, файл вывода фоновой команды и вывод вызова Bash. Все только
+-- для чтения; дополнения приходят по уведомлениям файловой системы модуля данных, таймеров
+-- нет.
 local data = require("claudr.data")
 local herdr = require("claudr.herdr")
 local model = require("claudr.tree.model")
@@ -177,6 +178,72 @@ function M.open_task(node)
       window.set_lines(v.buf, status_lines(n.data))
     end
   end)
+  return v
+end
+
+M.CALL_DONE = "[вызов завершён]"
+M.CALL_EMPTY = "[вывод пуст]"
+
+local function last_line_empty(buf)
+  local n = vim.api.nvim_buf_line_count(buf)
+  return (vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or "") == ""
+end
+
+-- Вид, который дописывает файл `file` по мере записи; `on_gone` — файл удалён. Возвращает
+-- наблюдение или nil, если файла нет.
+local function follow_file(v, file, on_gone)
+  return data.watch_output(file, function(chunk)
+    if v.released then
+      return
+    end
+    append_text(v.buf, chunk)
+    follow_end(v)
+  end, on_gone)
+end
+
+--- Вывод вызова Bash: у работающего — файл вывода по мере записи (удаление файла — сообщение
+--- о завершении под показанным выводом), у завершённого — вывод из результата вызова или
+--- сохранённый полный вывод.
+function M.open_bash(node)
+  local v = new_view("bash", node, "Bash: ")
+  function v.dispose()
+    if v.handle then
+      v.handle:close()
+      v.handle = nil
+    end
+  end
+  window.register(v)
+  local d = node.data or {}
+  if node.state ~= "finished" then
+    v.handle = present(d.output_file)
+      and follow_file(v, d.output_file, function()
+        if not v.released then
+          -- сообщение встаёт в незаконченную пустую строку вывода
+          append_text(v.buf, (last_line_empty(v.buf) and "" or "\n") .. M.CALL_DONE)
+          v.done = true
+          follow_end(v)
+        end
+      end)
+    if not v.handle then
+      window.set_lines(v.buf, { M.CALL_DONE })
+      v.done = true
+    end
+    return v
+  end
+  local out = model.call_output(node)
+  if out and present(out.persisted) then
+    v.handle = follow_file(v, out.persisted)
+    if v.handle then
+      return v
+    end
+  end
+  local text = out and out.text or ""
+  if text == "" then
+    window.set_lines(v.buf, { M.CALL_EMPTY })
+  else
+    window.set_lines(v.buf, vim.split(text:gsub("\r\n", "\n"), "\n", { plain = true }))
+  end
+  follow_end(v)
   return v
 end
 

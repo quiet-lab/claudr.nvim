@@ -199,6 +199,8 @@ function M.install(name_or_list, dest)
     assert(M.catalog[name], "неизвестный образец: " .. tostring(name))
     copy_tree(M.source .. "/" .. name, dest)
   end
+  -- временный каталог Claude Code образцов (каталоги задач сессий)
+  vim.uv.os_setenv("CLAUDR_CLAUDE_TMP", dest .. "/tmp")
   return dest
 end
 

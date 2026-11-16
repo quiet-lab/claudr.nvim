@@ -254,8 +254,12 @@ end
 --- панель-владелец.
 ---@param node table
 function M.show_for_node(node)
-  if node.kind ~= "pane" and node.owner_pane then
-    local owner = require("claudr.tree.model").get(node.owner_pane)
+  local model = require("claudr.tree.model")
+  if node.kind == "tab" or node.kind == "workspace" then
+    -- строка вкладки — агент вкладки
+    node = model.agent_node(node) or node
+  elseif node.kind ~= "pane" and node.owner_pane then
+    local owner = model.get(node.owner_pane)
     if owner then
       node = owner
     end

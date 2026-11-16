@@ -63,11 +63,8 @@ end
 
 local function on_model()
   local seen = {}
-  for _, node in
-    ipairs(model.find(function(n)
-      return n.kind == "pane" and n.pane_kind == "agent"
-    end))
-  do
+  -- панели с агентом, в том числе агенты вкладок без своей строки дерева
+  for _, node in ipairs(model.agent_panes()) do
     seen[node.id] = true
     local before, now = prev[node.id], node.state
     prev[node.id] = now

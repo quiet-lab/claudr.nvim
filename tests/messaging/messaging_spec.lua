@@ -57,6 +57,41 @@ describe("Сообщение агенту", function()
     ms.wait_note(rec, "сообщение отправлено")
   end)
 
+  it("строка вкладки — агент вкладки", function()
+    local d = env("idle")
+    messaging.send_message({ node = model.get("w1:t1"), text = "вкладке" })
+    t.wait(function()
+      return d:count("agent.prompt") == 1
+    end, "agent.prompt")
+    t.eq(d:last("agent.prompt").params.target, "w1:p1")
+  end)
+
+  it("Сообщение второму агенту", function()
+    local sample = "subagent-command"
+    local d = s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", sample, { focused = true }),
+        s.claude_pane("w1:p3", sample, { display_agent = "opus" }),
+      }),
+      sample
+    )
+    s.wait_node("w1:p3")
+    messaging.send_message({ node = model.get("w1:p3"), text = "второму" })
+    t.wait(function()
+      return d:count("agent.prompt") == 1
+    end, "agent.prompt")
+    t.eq(d:last("agent.prompt").params.target, "w1:p3")
+  end)
+
+  it("Вкладка без агента", function()
+    local d = s.env(s.snapshot({ s.double.pane({ pane_id = "w1:p4" }) }))
+    s.wait_node("w1:p4")
+    local rec = ms.stub()
+    messaging.send_message({ node = model.get("w1:t1"), text = "никому" })
+    ms.wait_note(rec, "нет агента")
+    t.eq(d:count("agent.prompt"), 0)
+  end)
+
   it("панель выбирается из перечня, когда узла нет", function()
     local d = env("idle")
     local rec = ms.stub({ select = { 1 } })

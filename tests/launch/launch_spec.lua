@@ -160,6 +160,16 @@ describe("Новая сессия делением панели", function()
     end
   )
 
+  it("единственная панель вкладки — без вопроса", function()
+    local d = env()
+    local rec = ms.stub({ select = { 1 } })
+    local err = run({ node = model.get("w1:t1"), mode = "split" })
+    t.eq(err, nil)
+    t.eq(#rec.selects, 1, "спрошено только направление")
+    t.eq(rec.selects[1].opts.prompt, "Направление деления:")
+    t.eq(d:last("pane.split").params.target_pane_id, "w1:p1")
+  end)
+
   it(
     "узел панели без режима: выбор способа запуска",
     function()
@@ -473,6 +483,9 @@ describe("Новая сессия в дереве", function()
     end, "узел новой панели с агентом")
     t.eq(model.get(pane.parent).kind, "tab")
     t.eq(model.get(pane.parent).parent, "w1")
+    -- агент новой вкладки показан строкой вкладки, своей строки у панели нет
+    t.eq(pane.hidden, true)
+    t.eq(model.row_of_pane(pane.id).id, pane.parent)
     t.ok(d:count("agent.start") == 1)
     -- деление
     local _, r2 = run({ node = model.get("w1:p1"), mode = "split", direction = "right" })

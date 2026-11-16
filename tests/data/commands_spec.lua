@@ -307,3 +307,176 @@ describe("Файл вывода фоновой команды", function()
     h:close()
   end)
 end)
+
+describe("Каталог задач сессии", function()
+  it("путь по транскрипту и временному каталогу", function()
+    local dir = u.fresh("command-completed")
+    local tr = fixtures.transcript("command-completed", dir)
+    t.eq(data.tasks_dir(tr), fixtures.tasks_dir("command-completed", dir))
+  end)
+
+  it("команда из командной строки оболочки", function()
+    t.eq(
+      data.eval_command(
+        "/bin/bash -c source /x/s.sh && eval 'echo '\"'\"'a b'\"'\"' | wc' < /dev/null && pwd -P"
+      ),
+      "echo 'a b' | wc"
+    )
+    t.eq(data.eval_command("/bin/bash -c ls"), nil)
+  end)
+end)
+
+describe("Работающий вызов Bash", function()
+  it("Файл вывода появился и удалён", function()
+    local h, changes, dir = watch("command-completed")
+    local tasks = fixtures.tasks_dir("command-completed", dir)
+    vim.fn.mkdir(tasks, "p")
+    local path = tasks .. "/bcall0001.output"
+    local restore = u.fake_proc(path, "make 'all'")
+    local f = assert(io.open(path, "w"))
+    f:write("начало\n")
+    f:close()
+    u.wait(function()
+      return h:state().calls.bcall0001 ~= nil
+    end, "работающий вызов")
+    local c = h:state().calls.bcall0001
+    restore()
+    t.eq(c.status, "running")
+    t.eq(c.output_file, path)
+    t.eq(c.command, "make 'all'")
+    -- дописывание файла состояния не меняет
+    local n = changes.n
+    f = assert(io.open(path, "a"))
+    f:write("ещё\n")
+    f:close()
+    u.settle()
+    t.eq(changes.n, n, "дописывание не вызывает пересчёт")
+    os.remove(path)
+    u.wait(function()
+      return h:state().calls.bcall0001 == nil
+    end, "вызов завершился")
+    h:close()
+  end)
+
+  it("владелец завершён — вызов оборван", function()
+    local h, _, dir = watch("command-completed")
+    local tasks = fixtures.tasks_dir("command-completed", dir)
+    vim.fn.mkdir(tasks, "p")
+    local f = assert(io.open(tasks .. "/bcall0003.output", "w"))
+    f:close()
+    u.wait(function()
+      return h:state().calls.bcall0003 ~= nil
+    end, "работающий вызов")
+    h:set_owner_alive(false)
+    t.eq(h:state().calls.bcall0003.status, "orphaned")
+    h:close()
+  end)
+
+  it(
+    "дочерний процесс с тем же потоком вывода пропускается",
+    function()
+      local out = vim.fn.tempname()
+      local restore = u.fake_proc(out, "make", 5000)
+      local child = data.proc_dir .. "/100"
+      vim.fn.mkdir(child .. "/fd", "p")
+      vim.uv.fs_symlink(out, child .. "/fd/1")
+      local f = assert(io.open(child .. "/cmdline", "wb"))
+      f:write("make\0")
+      f:close()
+      local cmd = data.process_command(out)
+      restore()
+      t.eq(cmd, "make")
+    end
+  )
+
+  it("каталога задач ещё нет", function()
+    local h, _, dir = watch("command-completed")
+    local tasks = fixtures.tasks_dir("command-completed", dir)
+    vim.fn.delete(dir .. "/tmp", "rf")
+    u.settle()
+    vim.fn.mkdir(tasks, "p")
+    local f = assert(io.open(tasks .. "/bcall0002.output", "w"))
+    f:close()
+    u.wait(function()
+      return h:state().calls.bcall0002 ~= nil
+    end, "вызов в созданном каталоге")
+    t.eq(h:state().calls.bcall0002.command, nil, "процесс не найден")
+    h:close()
+  end)
+
+  it(
+    "символьная ссылка субагента вызовом не считается",
+    function()
+      local h = watch("subagent-background")
+      for id, c in pairs(h:state().calls) do
+        t.eq(c.status, "finished", id)
+      end
+      h:close()
+    end
+  )
+end)
+
+describe("Завершённый вызов Bash", function()
+  it("Вывод и подпись из результата", function()
+    local h, changes = watch("command-completed")
+    local sid = fixtures.session_id("command-completed")
+    fixtures.append(
+      fixtures.transcript("command-completed"),
+      u.bash_call(sid, "toolu_01FixtureCall00000000001", "make", {
+        description = "Сборка",
+        stdout = "ok",
+        stderr = "warn",
+      })
+    )
+    u.wait(function()
+      return changes.n > 0 and h:state().calls.toolu_01FixtureCall00000000001 ~= nil
+    end, "завершённый вызов")
+    local c = h:state().calls.toolu_01FixtureCall00000000001
+    t.eq(c.status, "finished")
+    t.eq(c.description, "Сборка")
+    t.eq(c.command, "make")
+    t.eq(c.owner, nil)
+    t.eq(h:call_output(c.id), { text = "ok\nwarn" })
+    h:close()
+  end)
+
+  it("Большой вывод и прерывание", function()
+    local h, changes = watch("command-completed")
+    local sid = fixtures.session_id("command-completed")
+    fixtures.append(
+      fixtures.transcript("command-completed"),
+      u.bash_call(sid, "toolu_01FixtureCall00000000002", "find /", {
+        persisted = "/x/tool-results/b1.txt",
+        interrupted = true,
+      })
+    )
+    u.wait(function()
+      return changes.n > 0
+    end, "завершённый вызов")
+    local c = h:state().calls.toolu_01FixtureCall00000000002
+    t.eq(c.interrupted, true)
+    t.eq(h:call_output(c.id).persisted, "/x/tool-results/b1.txt")
+    h:close()
+  end)
+end)
+
+describe("Вызов, переведённый в фон", function()
+  it("становится фоновой командой", function()
+    local h, changes = watch("command-completed")
+    local sid = fixtures.session_id("command-completed")
+    fixtures.append(
+      fixtures.transcript("command-completed"),
+      u.bash_call(sid, "toolu_01FixtureCall00000000003", "sleep 100", {
+        background_id = "bmoved001",
+        output_file = "/x/bmoved001.output",
+      })
+    )
+    u.wait(function()
+      return changes.n > 0
+    end, "фоновая команда")
+    local st = h:state()
+    t.eq(st.tasks.bmoved001.command, "sleep 100")
+    t.eq(st.calls.toolu_01FixtureCall00000000003, nil)
+    h:close()
+  end)
+end)

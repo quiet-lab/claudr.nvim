@@ -47,7 +47,7 @@ local S = {
 local actions = {}
 local action_order = {}
 
--- Обозначения видов узлов в режиме `icons = "text"` (и в перечне панелей вида).
+-- Обозначения видов узлов в режиме `icons = "text"`.
 M.ICONS = {
   workspace = "W",
   tab = "T",
@@ -55,6 +55,7 @@ M.ICONS = {
   command = "$",
   subagent = "S",
   task = "&",
+  bash = "!",
 }
 
 -- Подписи состояний субагентов и фоновых команд.
@@ -101,6 +102,7 @@ M.KIND_SIGN = {
   subagent = "🤖",
   task = "🔧",
   command = "💻",
+  bash = "🐚",
 }
 
 local function mode()
@@ -273,18 +275,24 @@ end
 
 --- Текст состояния узла для строки дерева или nil.
 function M.state_text(node)
-  if node.kind == "subagent" or node.kind == "task" then
+  if node.kind == "subagent" or node.kind == "task" or node.kind == "bash" then
     return M.STATE_TEXT[node.state] or node.state
   end
-  if node.kind == "pane" and node.pane_kind == "agent" then
+  if node.kind == "tab" or (node.kind == "pane" and node.pane_kind == "agent") then
     return node.state
   end
   return nil
 end
 
---- Число ждущих запросов диалога узла (панель — вместе с запросами субагентов) или 0.
+--- Число ждущих запросов диалога узла или 0: строка агента (вкладка, workspace со скрытой
+--- единственной вкладкой, прочий агент) — вместе с запросами субагентов, субагент — свои.
 function M.pending_count(node)
-  if node.kind ~= "pane" and node.kind ~= "subagent" then
+  if node.kind == "workspace" and mode() ~= "herdr" then
+    -- в текстовом режиме вкладка всегда своей строкой: запросы показывает она
+    return 0
+  end
+  node = model.agent_node(node)
+  if not node or (node.kind ~= "pane" and node.kind ~= "subagent") then
     return 0
   end
   local ok, pending = pcall(require, "claudr.dialogs.pending")
@@ -369,7 +377,9 @@ local function herdr_line(node, prefix, row, marks, icons)
   local line = prefix
   if node.icon then
     local key = M.ICON_HL[node.icon] and node.icon or "unknown"
-    icons[#icons + 1] = { row = row - 1, col = #prefix, key = key, node = node.id }
+    -- ключ часов строки вкладки — панель её агента, как у строки агента herdr
+    icons[#icons + 1] =
+      { row = row - 1, col = #prefix, key = key, node = node.phase_key or node.id }
   end
   local sign
   if node.kind == "pane" then
@@ -919,6 +929,11 @@ end
 --- если узел показан.
 function M.focus(id)
   local node = model.get(id)
+  if node and node.hidden then
+    -- панель без строки: агента вкладки показывает строка вкладки
+    node = model.row_of_pane(id)
+    id = node and node.id
+  end
   if not node or not buf_valid() then
     return false
   end

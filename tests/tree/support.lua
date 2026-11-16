@@ -115,6 +115,9 @@ local current
 --- транскриптов. Возвращает двойник.
 function M.env(snapshot, samples, prepare, opts)
   M.claude_dir = u.fresh(samples)
+  if not (opts and opts.outputs == false) then
+    M.touch_outputs(M.claude_dir)
+  end
   if prepare then
     prepare(M.claude_dir)
   end
@@ -138,6 +141,30 @@ function M.env(snapshot, samples, prepare, opts)
     M.wait_loaded()
   end
   return d
+end
+
+--- Создаёт недостающие файлы вывода фоновых команд, на которые ссылаются транскрипты
+--- образцов в каталоге `dir`: узел команды без файла вывода в дерево не попадает, а в
+--- образцах часть файлов отсутствует (временный каталог очищен). `opts.outputs = false` у
+--- `env` оставляет образцы как есть.
+function M.touch_outputs(dir)
+  local tmp = dir .. "/tmp/"
+  for name, kind in vim.fs.dir(dir .. "/projects", { depth = 10 }) do
+    if kind == "file" and name:match("%.jsonl$") then
+      local f = io.open(dir .. "/projects/" .. name, "rb")
+      local text = f and f:read("*a") or ""
+      if f then
+        f:close()
+      end
+      for path in text:gmatch('written to: ([^%s\\"]+%.output)') do
+        if vim.startswith(path, tmp) and not vim.uv.fs_lstat(path) then
+          vim.fn.mkdir(vim.fs.dirname(path), "p")
+          local o = assert(io.open(path, "wb"))
+          o:close()
+        end
+      end
+    end
+  end
 end
 
 --- Ждать конца первого чтения транскриптов всех сессий панелей модели.

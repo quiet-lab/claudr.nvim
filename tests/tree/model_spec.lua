@@ -129,23 +129,25 @@ describe("Агенты других видов", function()
   end)
 end)
 
-describe("Состояние панели с агентом", function()
+describe("Состояние вкладки", function()
   it("Агент ждёт ответа", function()
     local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
-    t.eq(s.wait_node("w1:p1").state, "idle")
+    s.wait_node("w1:t1")
+    d:set_tab_status("w1:t1", "blocked")
     d:set_agent_status("w1:p1", "blocked")
-    s.wait_node("w1:p1", function(n)
+    s.wait_node("w1:t1", function(n)
       return n.state == "blocked"
     end, "состояние blocked")
   end)
 
   it("неизвестное значение показывается как есть", function()
     local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
-    s.wait_node("w1:p1")
-    d:set_agent_status("w1:p1", "done")
-    s.wait_node("w1:p1", function(n)
-      return n.state == "done"
-    end, "состояние done")
+    s.wait_node("w1:t1")
+    d:set_tab_status("w1:t1", "weird")
+    d:set_agent_status("w1:p1", "working")
+    s.wait_node("w1:t1", function(n)
+      return n.state == "weird" and n.icon == "weird"
+    end, "состояние как есть")
   end)
 
   it("Агент вышел", function()
@@ -167,15 +169,19 @@ describe("Состояние панели с агентом", function()
   end)
 end)
 
-describe("Субагенты панели", function()
+describe("Субагенты агента вкладки", function()
   it("Вложенные субагенты", function()
     s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
     local a = s.wait_node("w1:p1/a0000000000000002")
     local b = model.get("w1:p1/a0000000000000001")
     t.eq(a.kind, "subagent")
-    t.eq(a.parent, "w1:p1")
+    t.eq(a.parent, "w1:t1")
     t.eq(b.parent, a.id)
-    t.eq(s.children("w1:p1"), { a.id })
+    t.eq(
+      s.children("w1:t1"),
+      { a.id },
+      "строки панели агента вкладки нет"
+    )
     t.eq(a.children, { b.id })
     t.match(a.label, "outer")
     t.match(a.label, "general%-purpose")
@@ -183,7 +189,7 @@ describe("Субагенты панели", function()
   end)
 end)
 
-describe("Панель без известной сессии", function()
+describe("Агент без известной сессии", function()
   it("Сессия ещё не известна", function()
     local p = s.claude_pane("w1:p1", "owner-killed", { agent_session = vim.NIL })
     local d = s.env(s.snapshot({ p }), "owner-killed")
@@ -216,7 +222,7 @@ describe("Фоновые команды", function()
     s.env(s.snapshot({ s.claude_pane("w1:p1", "command-completed") }), "command-completed")
     local c = s.wait_node("w1:p1/bfixt0005")
     t.eq(c.kind, "task")
-    t.eq(c.parent, "w1:p1")
+    t.eq(c.parent, "w1:t1")
     t.match(c.label, "Print lines 1%-8 with one%-second pauses")
     t.eq(c.owner_pane, "w1:p1")
   end)
@@ -226,7 +232,7 @@ describe("Фоновые команды", function()
     local c = s.wait_node("w1:p1/bfixt0003")
     t.eq(c.parent, "w1:p1/a0000000000000004")
     t.ok(vim.tbl_contains(model.get("w1:p1/a0000000000000004").children, c.id))
-    t.ok(not vim.tbl_contains(s.children("w1:p1"), c.id))
+    t.ok(not vim.tbl_contains(s.children("w1:t1"), c.id))
   end)
 
   it("без description подпись — command", function()
@@ -234,12 +240,14 @@ describe("Фоновые команды", function()
     s.wait_node("w1:p1/bfixt0005")
     local path = fixtures.transcript("command-completed", s.claude_dir)
     local sid = fixtures.session_id("command-completed")
+    local out = s.claude_dir .. "/tmp/bnodesc01.output"
+    write(out, "")
     local recs = require("data.util").bash_launch(
       sid,
       "toolu_01FixtureNoDesc0000000001",
       "bnodesc01",
       "make check",
-      s.claude_dir .. "/tmp/bnodesc01.output"
+      out
     )
     recs[1].message.content[1].input.description = nil
     fixtures.append(path, recs)
@@ -467,7 +475,7 @@ describe("Обновление по событиям", function()
       fixtures.user_record(sid, "задание субагенту"),
     })
     local a = s.wait_node("w1:p1/a0000000000000031", nil, "новый субагент")
-    t.eq(a.parent, "w1:p1")
+    t.eq(a.parent, "w1:t1")
     t.eq(a.state, "running")
     t.match(a.label, "поиск по коду")
     t.match(a.label, "Explore")
@@ -571,6 +579,167 @@ describe("Обновление по событиям", function()
         return model.status().status == "no_server"
       end, "нет сервера")
       t.eq(model.roots(), {})
+    end
+  )
+end)
+
+describe("Агент вкладки", function()
+  it(
+    "панель с агентом в фокусе, иначе первая по номеру",
+    function()
+      s.env(
+        s.snapshot({
+          double.pane({ pane_id = "w1:p1", number = 1 }),
+          s.claude_pane("w1:p2", "owner-killed", { number = 2 }),
+          s.claude_pane("w1:p3", "subagent-nested", { number = 3 }),
+        }),
+        { "owner-killed", "subagent-nested" }
+      )
+      local tab = s.wait_node("w1:t1")
+      t.eq(tab.agent_pane, "w1:p2", "первая по номеру")
+      t.eq(tab.phase_key, "w1:p2")
+      t.eq(model.get("w1:p2").hidden, true)
+      t.eq(model.agent_node(tab).id, "w1:p2")
+      t.eq(model.pane_node(tab).id, "w1:p2")
+      t.eq(model.row_of_pane("w1:p2").id, "w1:t1")
+      t.eq(
+        model.agent_node(model.get("w1")).id,
+        "w1:p2",
+        "workspace с одной вкладкой"
+      )
+    end
+  )
+
+  it("вид workspace — агент активной вкладки", function()
+    s.env({
+      workspaces = { double.workspace({ workspace_id = "w1", active_tab_id = "w1:t2" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", number = 1 }),
+        double.tab({ tab_id = "w1:t2", number = 2 }),
+      },
+      panes = {
+        double.pane({ pane_id = "w1:p1", tab_id = "w1:t1", agent = "codex" }),
+        double.pane({ pane_id = "w1:p2", tab_id = "w1:t2", number = 1 }),
+        double.pane({ pane_id = "w1:p3", tab_id = "w1:t2", number = 2, agent = "codex" }),
+      },
+    })
+    local w = s.wait_node("w1")
+    t.eq(model.pane_node(w).id, "w1:p3")
+    t.eq(
+      model.agent_node(w),
+      nil,
+      "у workspace с несколькими вкладками агента нет"
+    )
+  end)
+
+  it("фокус выбирает агента", function()
+    s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", "owner-killed", { number = 1 }),
+        s.claude_pane("w1:p3", "subagent-nested", { number = 2, focused = true }),
+      }),
+      { "owner-killed", "subagent-nested" }
+    )
+    s.wait_node("w1:p3/a0000000000000002")
+    t.eq(model.get("w1:t1").agent_pane, "w1:p3")
+    t.eq(model.get("w1:p3/a0000000000000002").parent, "w1:t1")
+    t.eq(model.get("w1:p1/a0000000000000005").parent, "w1:p1")
+  end)
+end)
+
+describe("Прочие агенты вкладки", function()
+  it("Второй агент вкладки", function()
+    s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", "owner-killed", { number = 1, focused = true }),
+        double.pane({ pane_id = "w1:p2", number = 2, foreground_process = "nvim" }),
+        s.claude_pane("w1:p3", "subagent-nested", { number = 3, display_agent = "opus" }),
+      }),
+      { "owner-killed", "subagent-nested" }
+    )
+    local a = s.wait_node("w1:p3/a0000000000000002")
+    local kids = s.children("w1:t1")
+    t.eq(
+      kids[1],
+      "w1:p3",
+      "строка прочего агента первой, затем субагенты агента вкладки"
+    )
+    t.ok(not vim.tbl_contains(kids, "w1:p1"), "строки агента вкладки нет")
+    t.ok(not vim.tbl_contains(kids, "w1:p2"), "строки Neovim нет")
+    t.ok(vim.tbl_contains(kids, "w1:p1/a0000000000000005"))
+    local p3 = model.get("w1:p3")
+    t.eq(p3.pane_kind, "agent")
+    t.match(p3.label, "^opus")
+    t.eq(a.parent, "w1:p3")
+    t.eq(model.agent_node(p3).id, "w1:p3")
+    t.eq(model.get("w1:p2").hidden, true)
+  end)
+end)
+
+describe("Вкладка без агента", function()
+  it("вид — панель в фокусе, без неё первая", function()
+    s.env(s.snapshot({
+      double.pane({ pane_id = "w1:p1", number = 1 }),
+      double.pane({ pane_id = "w1:p4", number = 2, focused = true }),
+    }))
+    local tab = s.wait_node("w1:t1")
+    t.eq(tab.agent_pane, nil)
+    t.eq(model.agent_node(tab), nil)
+    t.eq(model.pane_node(tab).id, "w1:p4")
+    t.eq(s.children("w1:t1"), { "w1:p1", "w1:p4" })
+  end)
+end)
+
+describe("Узел команды с выводом", function()
+  it("команда без файла вывода не показывается", function()
+    s.env(
+      s.snapshot({ s.claude_pane("w1:p1", "command-completed") }),
+      "command-completed",
+      nil,
+      { outputs = false }
+    )
+    s.wait_node("w1:t1")
+    s.settle()
+    t.eq(model.get("w1:p1/bfixt0005"), nil)
+  end)
+end)
+
+describe("Вызовы Bash", function()
+  it(
+    "Работающий вызов под вкладкой, завершённый — под владельцем",
+    function()
+      s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
+      s.wait_node("w1:p1/a0000000000000002")
+      local tasks = fixtures.tasks_dir("subagent-nested", s.claude_dir)
+      vim.fn.mkdir(tasks, "p")
+      write(tasks .. "/bcall0009.output", "x")
+      local n = s.wait_node("w1:p1/bcall0009", nil, "работающий вызов")
+      t.eq(n.kind, "bash")
+      t.eq(n.parent, "w1:t1")
+      t.eq(n.state, "running")
+      t.eq(n.label, "Bash", "команду определить нельзя")
+      os.remove(tasks .. "/bcall0009.output")
+      s.wait_gone("w1:p1/bcall0009", "вызов завершился")
+      local sid = fixtures.session_id("subagent-nested")
+      local sub = fixtures.session_dir("subagent-nested", s.claude_dir)
+        .. "/subagents/agent-a0000000000000002.jsonl"
+      fixtures.append(
+        sub,
+        require("data.util").bash_call(sid, "toolu_01FixtureCall00000000009", "make", {
+          description = "Сборка",
+          stdout = "ok",
+        })
+      )
+      local c = s.wait_node(
+        "w1:p1/toolu_01FixtureCall00000000009",
+        nil,
+        "завершённый вызов"
+      )
+      t.eq(c.parent, "w1:p1/a0000000000000002")
+      t.eq(c.label, "Сборка")
+      t.eq(c.state, "finished")
+      t.eq(model.visible(c), false, "скрыт по умолчанию")
+      t.eq(model.call_output(c).text, "ok")
     end
   )
 end)

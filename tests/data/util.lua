@@ -213,6 +213,67 @@ function M.bash_launch(session_id, tool_id, task_id, command, output_file)
   return { call, result }
 end
 
+--- Записи вызова Bash не в фоне и его результата: `opts.description`, `opts.stdout`,
+--- `opts.stderr`, `opts.interrupted`, `opts.persisted` (путь сохранённого полного вывода),
+--- `opts.background_id` (вызов переведён в фон с этим идентификатором задачи).
+function M.bash_call(session_id, tool_id, command, opts)
+  opts = opts or {}
+  local call = fixtures.assistant_record(session_id, "")
+  call.message.content = {
+    {
+      type = "tool_use",
+      id = tool_id,
+      name = "Bash",
+      input = { command = command, description = opts.description },
+    },
+  }
+  local text = opts.stdout or ""
+  if opts.persisted then
+    text = "Output too large. Full output saved to: " .. opts.persisted
+  end
+  if opts.background_id then
+    text = "Command running in background with ID: "
+      .. opts.background_id
+      .. ". Output is being written to: "
+      .. (opts.output_file or "/x.output")
+  end
+  local result = fixtures.user_record(session_id, "")
+  result.message.content = { { tool_use_id = tool_id, type = "tool_result", content = text } }
+  result.toolUseResult = {
+    stdout = opts.stdout or "",
+    stderr = opts.stderr or "",
+    interrupted = opts.interrupted == true,
+    isImage = false,
+    persistedOutputPath = opts.persisted,
+    backgroundTaskId = opts.background_id,
+  }
+  return { call, result }
+end
+
+--- Подменённый каталог процессов (`claudr.data.proc_dir`): процесс `pid` пишет поток
+--- вывода в `output` и запущен командной строкой оболочки Claude Code с командой
+--- `command`. Возвращает функцию возврата прежнего каталога.
+function M.fake_proc(output, command, pid)
+  local data = require("claudr.data")
+  local dir = vim.fn.tempname()
+  pid = tostring(pid or 4242)
+  vim.fn.mkdir(dir .. "/" .. pid .. "/fd", "p")
+  vim.uv.fs_symlink(output, dir .. "/" .. pid .. "/fd/1")
+  local quoted = "'" .. command:gsub("'", [['"'"']]) .. "'"
+  local f = assert(io.open(dir .. "/" .. pid .. "/cmdline", "wb"))
+  f:write(table.concat({
+    "/bin/bash",
+    "-c",
+    "source /x/snapshot.sh && eval " .. quoted .. " < /dev/null && pwd -P >| /x/cwd",
+  }, "\0") .. "\0")
+  f:close()
+  local prev = data.proc_dir
+  data.proc_dir = dir
+  return function()
+    data.proc_dir = prev
+  end
+end
+
 --- Запись `attachment` `queued_command` с блоком уведомления (доставка посреди хода).
 function M.attachment_record(session_id, block)
   return {
@@ -274,7 +335,7 @@ end
 --- Синтетический транскрипт для проверок асинхронного чтения: в начале запуск фоновой
 --- команды `bbig0001`, затем `count` пар заполнителей по `size` байт, в конце уведомление
 --- о завершении команды с кодом выхода 0. Пишется в `path` (файл заменяется).
-function M.big_transcript(path, session_id, count, size)
+function M.big_transcript(path, session_id, count, size, output_file)
   local f = assert(io.open(path, "w"))
   local function put(records)
     for _, r in ipairs(records) do
@@ -282,7 +343,13 @@ function M.big_transcript(path, session_id, count, size)
     end
   end
   put(
-    M.bash_launch(session_id, "toolu_01FixtureBig000000000001", "bbig0001", "sleep 1", "/x.output")
+    M.bash_launch(
+      session_id,
+      "toolu_01FixtureBig000000000001",
+      "bbig0001",
+      "sleep 1",
+      output_file or "/x.output"
+    )
   )
   for i = 1, count do
     put(M.filler_records(session_id, i, i % 2 == 0 and "Read" or "Bash", size))

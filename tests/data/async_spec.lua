@@ -233,8 +233,9 @@ describe("Отбор строк учёта", function()
     local ok, err = pcall(orig_scan, ledger, text, nil)
     parse.decode = orig_decode
     t.ok(ok, err)
-    -- запуск (вызов и результат), 25 вызовов Bash без фона, уведомление
-    t.eq(decoded, 2 + 25 + 1)
+    -- запуск (вызов и результат), 25 вызовов Bash без фона с результатами (вывод вызова
+    -- Bash нужен узлу дерева), уведомление
+    t.eq(decoded, 2 + 25 * 2 + 1)
     t.eq(parse.build(ledger, {}, {}, true).tasks.bbig0001.status, "finished")
   end)
 end)

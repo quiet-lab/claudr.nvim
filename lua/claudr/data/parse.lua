@@ -181,6 +181,8 @@ function M.ledger()
   return {
     uses = {}, -- id вызова инструмента → {name, input, owner}
     commands = {}, -- id задачи → {id, owner, command, description, output_file, tool_use_id, monitor}
+    calls = {}, -- id вызова → завершённый вызов Bash не в фоне {id, owner, command, description, interrupted, persisted}
+    outputs = {}, -- id вызова → текст вывода завершённого вызова Bash (вне состояния: велик)
     finals = {}, -- id задачи → итоговое уведомление (со status)
     stops = {}, -- id задачи → true (результат TaskStop)
     agent_results = {}, -- id агента → status результата вызова Agent
@@ -206,6 +208,37 @@ local function result_info(rec, block)
   return {}
 end
 
+-- Завершённый вызов Bash не в фоне: команда и описание вызова, вывод результата
+-- (`stdout` и `stderr` из `toolUseResult`, без него — текст результата), прерывание и путь
+-- сохранённого полного вывода.
+local function on_call_result(ledger, rec, block, use, text)
+  local tur = tbl(rec.toolUseResult)
+  local out
+  if tur and (str(tur.stdout) or str(tur.stderr)) then
+    local parts = {}
+    for _, k in ipairs({ "stdout", "stderr" }) do
+      local v = str(tur[k])
+      if v and v ~= "" then
+        parts[#parts + 1] = v
+      end
+    end
+    out = table.concat(parts, "\n")
+  else
+    out = text
+  end
+  local persisted = tur and str(tur.persistedOutputPath)
+    or text:match("Full output saved to: (%S+)")
+  ledger.calls[block.tool_use_id] = {
+    id = block.tool_use_id,
+    owner = use.owner,
+    command = str(use.input.command),
+    description = str(use.input.description),
+    interrupted = tur ~= nil and tur.interrupted == true or nil,
+    persisted = persisted,
+  }
+  ledger.outputs[block.tool_use_id] = out or ""
+end
+
 local function on_tool_result(ledger, rec, block, owner)
   local use = ledger.uses[block.tool_use_id]
   if not use then
@@ -213,20 +246,35 @@ local function on_tool_result(ledger, rec, block, owner)
   end
   local text = result_text(block) or ""
   local input = use.input
-  if use.name == "Bash" and input.run_in_background == true then
-    local info = result_info(rec, block)
-    local id = str(info.backgroundTaskId) or text:match("background with ID: ([%w_%-]+)")
-    if id then
-      ledger.commands[id] = {
-        id = id,
-        owner = owner,
-        command = str(input.command),
-        description = str(input.description),
-        output_file = text:match("written to: (.-%.output)"),
-        tool_use_id = block.tool_use_id,
-        monitor = false,
-      }
+  if use.name == "Bash" then
+    local id
+    if input.run_in_background == true then
+      id = str(result_info(rec, block).backgroundTaskId)
+        or text:match("background with ID: ([%w_%-]+)")
+    else
+      -- вызов, переведённый в фон по ходу работы, — фоновая команда с тем же идентификатором
+      -- задачи; вывод обычного вызова может содержать ту же фразу, поэтому — только начало
+      -- текста результата
+      local tur = tbl(rec.toolUseResult) or {}
+      id = str(tur.backgroundTaskId)
+        or text:match("^Command running in background with ID: ([%w_%-]+)")
+      if not id then
+        on_call_result(ledger, rec, block, use, text)
+        return
+      end
     end
+    if not id then
+      return
+    end
+    ledger.commands[id] = {
+      id = id,
+      owner = owner,
+      command = str(input.command),
+      description = str(input.description),
+      output_file = text:match("written to: (.-%.output)"),
+      tool_use_id = block.tool_use_id,
+      monitor = false,
+    }
   elseif use.name == "Monitor" then
     local info = result_info(rec, block)
     local id = str(info.taskId) or text:match("Monitor started %(task ([%w_%-]+)")
@@ -307,7 +355,7 @@ local function wanted_result(ledger, id)
   if not use or not RESULT_TOOLS[use.name] then
     return false
   end
-  return use.name ~= "Bash" or use.input.run_in_background == true
+  return true
 end
 
 local HUGE = math.huge
@@ -417,7 +465,10 @@ end
 --- для субагентов, у которых есть и транскрипт). `owner_alive == false` — панель владельца
 --- завершила процесс или закрыта.
 function M.build(ledger, metas, paired, owner_alive)
-  local subagents, tasks = {}, {}
+  local subagents, tasks, calls = {}, {}, {}
+  for id, c in pairs(ledger.calls) do
+    calls[id] = vim.tbl_extend("force", c, { status = "finished" })
+  end
   for id, meta in pairs(metas) do
     if paired[id] then
       local s = M.subagent(id, meta)
@@ -471,7 +522,7 @@ function M.build(ledger, metas, paired, owner_alive)
     end
     tasks[id] = task
   end
-  return { subagents = subagents, tasks = tasks }
+  return { subagents = subagents, tasks = tasks, calls = calls }
 end
 
 return M

@@ -115,15 +115,80 @@ describe("Фоновая команда — файл вывода", function()
     local node = env("command-completed", "task", function(n)
       return n.state == "finished"
     end)
-    t.ok(
-      vim.uv.fs_stat(node.data.output_file or "") == nil,
-      "в образце файла вывода нет"
-    )
+    -- файл исчез после того, как узел показан
+    os.remove(node.data.output_file)
     local v = view.open(node)
     t.eq(v.unavailable, true)
     local text = s.text(v.buf)
     t.match(text, "файл вывода недоступен")
     t.match(text, "Состояние: завершена")
     t.match(text, "Код выхода: 0")
+  end)
+end)
+
+describe("Вызов Bash — вывод", function()
+  local files = require("claudr.view.files")
+
+  it("Работающий вызов и его завершение", function()
+    s.big_editor()
+    s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), { "owner-killed" })
+    local tasks = fixtures.tasks_dir("owner-killed", s.claude_dir)
+    vim.fn.mkdir(tasks, "p")
+    local path = tasks .. "/bcall0001.output"
+    local f = assert(io.open(path, "w"))
+    f:write("начало\n")
+    f:close()
+    local node = s.wait_node("w1:p1/bcall0001")
+    local v = s.track(view.open(node))
+    t.eq(v.kind, "bash")
+    s.wait_text(v.buf, "начало", "уже записанный вывод")
+    f = assert(io.open(path, "a"))
+    f:write("ещё\n")
+    f:close()
+    s.wait_text(v.buf, "ещё", "дописанный вывод")
+    os.remove(path)
+    t.wait(function()
+      return v.done == true
+    end, "сообщение о завершении")
+    t.eq(lines(v.buf), { "начало", "ещё", files.CALL_DONE })
+    t.eq(vim.bo[v.buf].modifiable, false)
+  end)
+
+  it("Завершённый вызов", function()
+    s.big_editor()
+    s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), { "owner-killed" })
+    s.wait_node("w1:p1/a0000000000000005")
+    local sid = fixtures.session_id("owner-killed")
+    fixtures.append(
+      fixtures.transcript("owner-killed", s.claude_dir),
+      u.bash_call(sid, "toolu_01FixtureCall00000000001", "ls", { stdout = "a\nb" })
+    )
+    fixtures.append(
+      fixtures.transcript("owner-killed", s.claude_dir),
+      u.bash_call(sid, "toolu_01FixtureCall00000000002", "true", {})
+    )
+    local node = s.wait_node("w1:p1/toolu_01FixtureCall00000000002")
+    local v = s.track(view.open(model.get("w1:p1/toolu_01FixtureCall00000000001")))
+    t.eq(lines(v.buf), { "a", "b" })
+    local e = s.track(view.open(node))
+    t.eq(lines(e.buf), { files.CALL_EMPTY })
+  end)
+
+  it("Завершённый вызов с большим выводом", function()
+    s.big_editor()
+    s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), { "owner-killed" })
+    s.wait_node("w1:p1/a0000000000000005")
+    local full = s.claude_dir .. "/full.txt"
+    local f = assert(io.open(full, "w"))
+    f:write("полный вывод\n")
+    f:close()
+    local sid = fixtures.session_id("owner-killed")
+    fixtures.append(
+      fixtures.transcript("owner-killed", s.claude_dir),
+      u.bash_call(sid, "toolu_01FixtureCall00000000003", "find /", { persisted = full })
+    )
+    local node = s.wait_node("w1:p1/toolu_01FixtureCall00000000003")
+    local v = s.track(view.open(node))
+    s.wait_text(v.buf, "полный вывод", "сохранённый полный вывод")
   end)
 end)

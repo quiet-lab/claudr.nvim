@@ -48,15 +48,15 @@ describe("Открытие дерева", function()
     t.eq(vim.bo[buf].filetype, "claudr-tree")
     wait_line("🔧 Wait for background sleep command output")
     local lines = view.lines()
-    -- единственная вкладка схлопнута: панели прямо под workspace
+    -- единственная вкладка схлопнута: её строки прямо под workspace; строки панели агента
+    -- вкладки нет — сначала панели, затем субагенты и команды агента
     t.eq(lines[1], "▾ S ws1")
-    t.eq(lines[2], "  ▾ S opus задача w1:p1")
+    t.eq(lines[2], "    💻 cargo /src")
     t.eq(
       lines[3],
-      "    ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
+      "  ▾ 🤖 Проверка фонового Bash с кодом выхода (general-purpose)"
     )
-    t.eq(lines[4], "        🔧 Wait for background sleep command output")
-    t.eq(lines[#lines], "    💻 cargo /src")
+    t.eq(lines[4], "      🔧 Wait for background sleep command output")
     -- повторный вызов не открывает второе окно
     local wins = #vim.api.nvim_tabpage_list_wins(0)
     vim.cmd("wincmd p")
@@ -75,15 +75,26 @@ describe("Открытие дерева", function()
 end)
 
 describe("Перерисовка", function()
-  it("строка панели меняется по событию herdr", function()
-    local d = s.env(s.snapshot({ s.claude_pane("w1:p1", "owner-killed") }), "owner-killed")
+  it("строка вкладки меняется по событию herdr", function()
+    local d = s.env({
+      workspaces = { double.workspace({ workspace_id = "w1", label = "ws1" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", label = "main", number = 1, agent_status = "idle" }),
+        double.tab({ tab_id = "w1:t2", label = "aux", number = 2 }),
+      },
+      panes = {
+        s.claude_pane("w1:p1", "owner-killed"),
+        double.pane({ pane_id = "w1:p2", tab_id = "w1:t2" }),
+      },
+    }, "owner-killed")
     view.open()
-    wait_line("opus задача w1:p1")
-    t.eq(view._icon("w1:p1").text, s.ICONS.idle.frames[1])
+    wait_line("main")
+    t.eq(view._icon("w1:t1").text, s.ICONS.idle.frames[1])
     view.focus("w1:p1/a0000000000000005")
+    d:set_tab_status("w1:t1", "blocked")
     d:set_agent_status("w1:p1", "blocked")
     t.wait(function()
-      local ic = view._icon("w1:p1")
+      local ic = view._icon("w1:t1")
       return ic and ic.text == s.ICONS.blocked.frames[1]
     end, "значок blocked")
     t.eq(
@@ -133,10 +144,12 @@ describe("Клавиши и действия", function()
     s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
     view.open()
     wait_line("inner")
+    -- агент вкладки показан строкой вкладки, единственная вкладка — строкой workspace
     t.ok(view.focus("w1:p1"))
+    t.eq(view.node_at_cursor().id, "w1")
     press("<Tab>")
     t.ok(not has_line("outer"), "дети свёрнуты")
-    t.match(view.lines()[view.line_of("w1:p1")], "▸ S opus")
+    t.match(view.lines()[view.line_of("w1")], "^▸ .*ws1")
     press("za")
     t.ok(has_line("outer"))
   end)

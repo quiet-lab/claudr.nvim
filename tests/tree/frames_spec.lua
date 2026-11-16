@@ -42,6 +42,17 @@ local function agent(id, status)
   return double.pane({ pane_id = id, agent = "codex", agent_status = status })
 end
 
+-- Снимок одной вкладки, где агент вкладки — `w1:p0` в фокусе (idle, без анимации), а панели
+-- `panes` — строки прочих агентов: строку панели с агентом дерево показывает только у них.
+local function snap(panes)
+  table.insert(
+    panes,
+    1,
+    double.pane({ pane_id = "w1:p0", agent = "codex", agent_status = "idle", focused = true })
+  )
+  return s.snapshot(panes)
+end
+
 -- Ждать состояния таймера: перепроверка после событий окон идёт после самого события.
 local function wait_timer(active, msg)
   t.wait(function()
@@ -71,7 +82,7 @@ end)
 
 describe("Анимация состояний", function()
   it("Таймер заведён", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     local tm = rec.active()
@@ -89,7 +100,7 @@ describe("Анимация состояний", function()
       local tbl = vim.deepcopy(s.ICONS)
       tbl.blocked = { frames = { "b0", "b1" }, period = 1000 }
       icons.set(tbl)
-      s.env(s.snapshot({ agent("w1:p1", "blocked"), agent("w1:p2", "working") }))
+      s.env(snap({ agent("w1:p1", "blocked"), agent("w1:p2", "working") }))
       view.open()
       wait_line("w1:p2")
       view._tick(1030)
@@ -98,7 +109,7 @@ describe("Анимация состояний", function()
   )
 
   it("Нет анимируемых узлов", function()
-    s.env(s.snapshot({ agent("w1:p1", "idle"), agent("w1:p2", "blocked") }))
+    s.env(snap({ agent("w1:p1", "idle"), agent("w1:p2", "blocked") }))
     view.open()
     wait_line("w1:p2")
     t.eq(rec.active(), nil)
@@ -106,7 +117,7 @@ describe("Анимация состояний", function()
   end)
 
   it("Окно закрыто", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     t.ok(rec.active())
@@ -117,7 +128,7 @@ describe("Анимация состояний", function()
   end)
 
   it("Окно закрыто: дерева нет в текущей вкладке", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     t.ok(rec.active())
@@ -133,7 +144,7 @@ describe("Анимация состояний", function()
   it(
     "буфер дерева сменился в окне — таймер остановлен",
     function()
-      s.env(s.snapshot({ agent("w1:p1", "working") }))
+      s.env(snap({ agent("w1:p1", "working") }))
       local win = view.open()
       wait_line("w1:p1")
       t.ok(rec.active())
@@ -147,7 +158,7 @@ describe("Анимация состояний", function()
   )
 
   it("Анимируемый узел скрыт", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     t.ok(rec.active())
@@ -164,7 +175,7 @@ describe("Анимация состояний", function()
     local tbl = vim.deepcopy(s.ICONS)
     tbl.done = { frames = { "d0", "d1" }, period = 100 }
     icons.set(tbl)
-    s.env(s.snapshot({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
+    s.env(snap({ s.claude_pane("w1:p1", "subagent-nested") }), "subagent-nested")
     view.open()
     s.wait_node("w1:p1/a0000000000000002")
     wait_line("w1:p1")
@@ -176,7 +187,7 @@ describe("Анимация состояний", function()
   end)
 
   it("Состояние изменилось", function()
-    local d = s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "idle") }))
+    local d = s.env(snap({ agent("w1:p1", "working"), agent("w1:p2", "idle") }))
     view.open()
     wait_line("w1:p1")
     t.ok(rec.active())
@@ -189,7 +200,7 @@ describe("Анимация состояний", function()
   end)
 
   it("модель остановлена — таймер остановлен", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     t.ok(rec.active())
@@ -198,7 +209,7 @@ describe("Анимация состояний", function()
   end)
 
   it("срабатывание перепроверяет условия", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     view._tick(PERIOD)
@@ -212,7 +223,7 @@ describe("Анимация состояний", function()
   it(
     "утечек нет: таймер закрыт и подписка на значки снята",
     function()
-      s.env(s.snapshot({ agent("w1:p1", "working") }))
+      s.env(snap({ agent("w1:p1", "working") }))
       view.open()
       wait_line("w1:p1")
       t.eq(#icons.subs, 1, "подписка на значки")
@@ -235,7 +246,7 @@ end)
 
 describe("Кадр анимации", function()
   it("Смена кадра", function()
-    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
+    s.env(snap({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
     view.open()
     wait_line("w1:p2")
     local base = 999 * PERIOD -- кадр 0
@@ -252,7 +263,7 @@ describe("Кадр анимации", function()
   end)
 
   it("Кадр по часам", function()
-    s.env(s.snapshot({ agent("w1:p1", "working") }))
+    s.env(snap({ agent("w1:p1", "working") }))
     view.open()
     wait_line("w1:p1")
     view._tick(5 * PERIOD)
@@ -269,7 +280,7 @@ describe("Кадр анимации", function()
   end)
 
   it("Только значки", function()
-    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "idle") }))
+    s.env(snap({ agent("w1:p1", "working"), agent("w1:p2", "idle") }))
     local win = view.open()
     wait_line("w1:p2")
     vim.api.nvim_win_set_cursor(win, { view.line_of("w1:p2"), 0 })
@@ -351,7 +362,7 @@ describe("Кадры строк со сдвигом (per_row)", function()
 
   it("разные строки показывают разные кадры", function()
     icons.set(per_row_icons(100))
-    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
+    s.env(snap({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
     view.open()
     wait_line("w1:p2")
     local base = 1000000
@@ -370,9 +381,42 @@ describe("Кадры строк со сдвигом (per_row)", function()
     t.ok(differ > 0, "кадры строк не совпадают всё время")
   end)
 
+  it("ключ строки вкладки — панель её агента", function()
+    icons.set(per_row_icons(100))
+    s.env({
+      workspaces = { double.workspace({ workspace_id = "w1", label = "ws1" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", number = 1, agent_status = "working" }),
+        double.tab({ tab_id = "w1:t2", number = 2, agent_status = "working" }),
+      },
+      panes = {
+        agent("w1:p1", "working"),
+        double.pane({
+          pane_id = "w1:p2",
+          tab_id = "w1:t2",
+          agent = "codex",
+          agent_status = "working",
+        }),
+      },
+    })
+    view.open()
+    wait_line("w1:t2")
+    for i = 0, 20 do
+      local now = 1000000 + i * 37
+      view._tick(now)
+      for tab, pane in pairs({ ["w1:t1"] = "w1:p1", ["w1:t2"] = "w1:p2" }) do
+        t.eq(
+          view._icon(tab).text,
+          MOON[view.row_frame_index(icons.table.working, pane, now) + 1],
+          tab
+        )
+      end
+    end
+  end)
+
   it("таймер — на ближайшую границу среди строк", function()
     icons.set(per_row_icons(100))
-    s.env(s.snapshot({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
+    s.env(snap({ agent("w1:p1", "working"), agent("w1:p2", "working") }))
     view.open()
     wait_line("w1:p2")
     local now = 1000000
@@ -428,7 +472,7 @@ describe("Обновление по событиям", function()
     function()
       view._set_timer_factory()
       local timers = s.timer_count()
-      s.env(s.snapshot({ agent("w1:p1", "idle") }))
+      s.env(snap({ agent("w1:p1", "idle") }))
       view.open()
       wait_line("w1:p1")
       s.settle()

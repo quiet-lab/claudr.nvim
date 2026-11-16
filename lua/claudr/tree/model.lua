@@ -7,8 +7,8 @@
 -- которого в снимке нет. Таймеров и опроса нет.
 --
 -- Узел: `{ id, kind, pane_kind, label, text_label, state, icon, symbol, color, parent,
--- children, data, owner_pane }`:
---   kind       "workspace" | "tab" | "pane" | "subagent" | "task";
+-- children, data, owner_pane, agent_pane, target_pane, phase_key, hidden }`:
+--   kind       "workspace" | "tab" | "pane" | "subagent" | "task" | "bash";
 --   pane_kind  у панели — "agent" | "command", у остальных nil;
 --   label      подпись без состояния; у workspace — «<символ> <label>» по токену `symbol`;
 --   text_label у workspace — `label` без символа (для режима `icons = "text"`), иначе nil;
@@ -22,9 +22,20 @@
 --              панелей с агентом, иначе nil;
 --   parent     идентификатор родителя или nil; children — идентификаторы детей по порядку;
 --   data       исходная запись (снимка herdr или модуля данных);
---   owner_pane у субагента и команды — идентификатор панели владельца.
--- Идентификаторы: workspace, вкладка, панель — как в herdr; субагент и фоновая команда —
--- `<панель владельца>/<идентификатор субагента или задачи>`.
+--   owner_pane у субагента, команды и вызова Bash — идентификатор панели владельца;
+--   agent_pane панель агента, которому адресуются действия строки: у вкладки — агент вкладки
+--              (панель с агентом в фокусе, иначе первая по номеру), у workspace с одной
+--              вкладкой — её агент, у панели с агентом — она сама; иначе nil;
+--   target_pane панель, терминал которой показывает вид строки: у вкладки — агент вкладки,
+--              без него панель в фокусе, без неё первая; у workspace — то же для активной
+--              вкладки; у панели — она сама;
+--   phase_key  ключ часов строки (кадр анимации): у вкладки — панель её агента, иначе nil;
+--   hidden     у панели без строки (агент вкладки, панель с Neovim) — true: такой узел
+--              отдаёт `get`, но в дереве его нет.
+-- Строками дерева панели с агентом становятся, только если они не агент своей вкладки;
+-- панели с Neovim на переднем плане строк не имеют (решение D58).
+-- Идентификаторы: workspace, вкладка, панель — как в herdr; субагент, фоновая команда и
+-- вызов Bash — `<панель владельца>/<идентификатор субагента, задачи или вызова>`.
 local herdr = require("claudr.herdr")
 local data = require("claudr.data")
 local config = require("claudr.config")
@@ -36,6 +47,7 @@ local S = {
   unsubscribe = nil,
   nodes = {},
   roots = {},
+  hidden = {}, -- панель без строки дерева → её узел (`hidden = true`)
   status = { status = "stopped" },
   snapshot = { workspaces = {}, tabs = {}, panes = {} },
   -- панель → { sid, handle, alive }: слежение за сессией Claude Code панели
@@ -373,8 +385,23 @@ local function add(nodes, node, parent_id)
   return node
 end
 
--- Субагенты и фоновые команды сессии под узлом панели.
-local function add_session(nodes, pane_id, st)
+local function bash_label(c)
+  local label
+  if c.status == "finished" then
+    label = str(c.description) or str(c.command) or "Bash"
+    if c.interrupted then
+      label = label .. ", прерван"
+    end
+  else
+    label = str(c.command) or "Bash"
+  end
+  return label
+end
+
+-- Субагенты, фоновые команды и вызовы Bash сессии панели `pane_id` под строкой `root`
+-- (строка вкладки для агента вкладки, иначе строка самой панели). Фоновая команда без
+-- файла вывода и работающий вызов без файла в дерево не попадают (решение D63).
+local function add_session(nodes, pane_id, st, root)
   local prefix = pane_id .. "/"
   local subs = {}
   for id, s in pairs(st.subagents or {}) do
@@ -399,25 +426,29 @@ local function add_session(nodes, pane_id, st)
   end)
   for _, s in ipairs(subs) do
     local node = nodes[prefix .. s.id]
-    local parent = pane_id
+    local parent = root
     if present(s.parent_id) and nodes[prefix .. s.parent_id] then
       parent = prefix .. s.parent_id
     end
     node.parent = parent
     table.insert(nodes[parent].children, node.id)
   end
+  local function owner_row(owner)
+    if present(owner) and nodes[prefix .. owner] then
+      return prefix .. owner
+    end
+    return root
+  end
   local tasks = {}
   for _, t in pairs(st.tasks or {}) do
-    tasks[#tasks + 1] = t
+    if t.output_available ~= false then
+      tasks[#tasks + 1] = t
+    end
   end
   table.sort(tasks, function(a, b)
     return a.id < b.id
   end)
   for _, t in ipairs(tasks) do
-    local parent = pane_id
-    if present(t.owner) and nodes[prefix .. t.owner] then
-      parent = prefix .. t.owner
-    end
     add(nodes, {
       id = prefix .. t.id,
       kind = "task",
@@ -426,12 +457,64 @@ local function add_session(nodes, pane_id, st)
       icon = TASK_ICON[t.status] or str(t.status),
       data = t,
       owner_pane = pane_id,
-    }, parent)
+    }, owner_row(t.owner))
+  end
+  local calls = {}
+  for _, c in pairs(st.calls or {}) do
+    calls[#calls + 1] = c
+  end
+  table.sort(calls, function(a, b)
+    return a.id < b.id
+  end)
+  for _, c in ipairs(calls) do
+    add(nodes, {
+      id = prefix .. c.id,
+      kind = "bash",
+      label = bash_label(c),
+      state = c.status,
+      icon = TASK_ICON[c.status] or str(c.status),
+      data = c,
+      owner_pane = pane_id,
+    }, owner_row(c.owner))
   end
 end
 
+-- Neovim на переднем плане: вспомогательная панель, строки не получает (решение D58).
+local function is_nvim(p)
+  return str(p.foreground_process) == "nvim"
+end
+
+-- Агент вкладки: панель с агентом в фокусе, иначе первая по номеру; nil — агента нет.
+local function tab_agent(panes)
+  local first
+  for _, p in ipairs(panes) do
+    if pane_kind(p) == "agent" then
+      if p.focused == true then
+        return p
+      end
+      first = first or p
+    end
+  end
+  return first
+end
+
+-- Панель, терминал которой показывает вид вкладки: агент, без него панель в фокусе, без
+-- неё первая.
+local function tab_target(panes)
+  local agent = tab_agent(panes)
+  if agent then
+    return agent
+  end
+  for _, p in ipairs(panes) do
+    if p.focused == true then
+      return p
+    end
+  end
+  return panes[1]
+end
+
 local function build(snap)
-  local nodes, roots = {}, {}
+  local nodes, roots, hidden = {}, {}, {}
   local workspaces = sorted(snap.workspaces or {}, "workspace_id")
   local ws_by_id = {}
   for _, w in ipairs(workspaces) do
@@ -500,30 +583,55 @@ local function build(snap)
       table.insert(panes_of_tab[p.tab_id], p)
     end
   end
+  local tabs_of_ws = {}
   for _, t in ipairs(sorted(snap.tabs or {}, "tab_id")) do
     if present(t.tab_id) then
       local parent = nodes[t.workspace_id] and t.workspace_id or nil
+      local tp = panes_of_tab[t.tab_id] or {}
+      local agent = tab_agent(tp)
+      local target = tab_target(tp)
       add(nodes, {
         id = t.tab_id,
         kind = "tab",
-        label = tab_label(t, ws_by_id[t.workspace_id], panes_of_tab[t.tab_id] or {}),
+        label = tab_label(t, ws_by_id[t.workspace_id], tp),
         state = str(t.agent_status),
         icon = str(t.agent_status),
         color = color_of(t.workspace_id),
+        agent_pane = agent and agent.pane_id or nil,
+        target_pane = target and target.pane_id or nil,
+        phase_key = agent and agent.pane_id or nil,
         data = t,
       }, parent)
-      if not parent then
+      if parent then
+        tabs_of_ws[parent] = tabs_of_ws[parent] or {}
+        table.insert(tabs_of_ws[parent], nodes[t.tab_id])
+      else
         roots[#roots + 1] = t.tab_id
       end
     end
   end
+  for ws_id, tabs in pairs(tabs_of_ws) do
+    local w = nodes[ws_id]
+    if #tabs == 1 then
+      w.agent_pane = tabs[1].agent_pane
+    end
+    local active = tabs[1]
+    for _, t in ipairs(tabs) do
+      if t.id == str(w.data.active_tab_id) then
+        active = t
+      end
+    end
+    w.target_pane = active.target_pane
+  end
+  -- Строка, под которой стоят субагенты и команды сессии панели: панель агента вкладки —
+  -- строка вкладки, иначе строка самой панели.
+  local session_root = {}
   for _, p in ipairs(panes) do
     if present(p.pane_id) then
-      local parent = (nodes[p.tab_id] and nodes[p.tab_id].kind == "tab" and p.tab_id)
-        or (nodes[p.workspace_id] and p.workspace_id)
-        or nil
+      local tab = nodes[p.tab_id] and nodes[p.tab_id].kind == "tab" and nodes[p.tab_id]
+      local parent = (tab and p.tab_id) or (nodes[p.workspace_id] and p.workspace_id) or nil
       local kind = pane_kind(p)
-      add(nodes, {
+      local node = {
         id = p.pane_id,
         kind = "pane",
         pane_kind = kind,
@@ -532,15 +640,32 @@ local function build(snap)
         icon = kind == "agent" and str(p.agent_status) or nil,
         color = kind == "agent" and color_of(p.workspace_id) or nil,
         symbol = kind == "agent" and symbol_of(p.workspace_id) or nil,
+        target_pane = p.pane_id,
+        agent_pane = kind == "agent" and p.pane_id or nil,
         data = p,
-      }, parent)
-      if not parent then
-        roots[#roots + 1] = p.pane_id
+      }
+      local is_tab_agent = tab and tab.agent_pane == p.pane_id
+      if is_tab_agent or is_nvim(p) then
+        node.hidden = true
+        node.parent = parent
+        node.children = {}
+        hidden[p.pane_id] = node
+        session_root[p.pane_id] = is_tab_agent and p.tab_id or nil
+      else
+        add(nodes, node, parent)
+        if not parent then
+          roots[#roots + 1] = p.pane_id
+        end
+        session_root[p.pane_id] = p.pane_id
       end
-      local s = S.sessions[p.pane_id]
-      if s then
-        add_session(nodes, p.pane_id, s.handle:state())
-      end
+    end
+  end
+  -- сессии — после всех панелей: под вкладкой сначала её панели, затем субагенты и команды
+  for _, p in ipairs(panes) do
+    local s = present(p.pane_id) and S.sessions[p.pane_id]
+    local root = s and session_root[p.pane_id]
+    if root and nodes[root] then
+      add_session(nodes, p.pane_id, s.handle:state(), root)
     end
   end
   -- вложенные workspace идут после вкладок своего родителя
@@ -550,13 +675,13 @@ local function build(snap)
       table.insert(nodes[node.parent].children, node.id)
     end
   end
-  return nodes, roots
+  return nodes, roots, hidden
 end
 
 rebuild = function()
   local snap = S.snapshot
   sync_sessions(snap.panes or {})
-  S.nodes, S.roots = build(snap)
+  S.nodes, S.roots, S.hidden = build(snap)
   notify()
 end
 
@@ -603,7 +728,7 @@ function M.stop()
   S.exited = {}
   places = {}
   S.status = { status = "stopped" }
-  S.nodes, S.roots = {}, {}
+  S.nodes, S.roots, S.hidden = {}, {}, {}
   notify()
 end
 
@@ -612,9 +737,73 @@ function M.started()
   return S.started
 end
 
---- Узел по идентификатору или nil.
+--- Узел по идентификатору или nil. Панель без строки дерева (агент вкладки, панель с
+--- Neovim) отдаётся узлом с `hidden = true`.
 function M.get(id)
-  return S.nodes[id]
+  return S.nodes[id] or (S.hidden and S.hidden[id]) or nil
+end
+
+--- Узел панели агента, которому адресуются действия строки `node` (вкладка, workspace с
+--- одной вкладкой, панель с агентом), или nil; узлы субагентов и команд — как есть.
+function M.agent_node(node)
+  if not node then
+    return nil
+  end
+  if node.kind == "tab" or node.kind == "workspace" then
+    return node.agent_pane and M.get(node.agent_pane) or nil
+  end
+  return node
+end
+
+--- Узел панели, терминал которой показывает вид строки `node` (вкладка — агент вкладки,
+--- без него панель в фокусе; workspace — то же для активной вкладки), или nil; прочие узлы —
+--- как есть.
+function M.pane_node(node)
+  if not node then
+    return nil
+  end
+  if node.kind == "tab" or node.kind == "workspace" then
+    return node.target_pane and M.get(node.target_pane) or nil
+  end
+  return node
+end
+
+--- Строка дерева, которая показывает панель `pane_id`: строка самой панели, у агента
+--- вкладки — строка вкладки; nil — строки нет.
+function M.row_of_pane(pane_id)
+  local node = M.get(pane_id)
+  if not node then
+    return nil
+  end
+  if not node.hidden then
+    return node
+  end
+  local tab = node.parent and S.nodes[node.parent]
+  if tab and tab.kind == "tab" and tab.agent_pane == pane_id then
+    return tab
+  end
+  return nil
+end
+
+--- Все панели с агентом (строки и панели без строк) в порядке снимка.
+function M.agent_panes()
+  local out = {}
+  for _, p in ipairs(sorted(S.snapshot.panes or {}, "pane_id")) do
+    local node = present(p.pane_id) and M.get(p.pane_id)
+    if node and node.pane_kind == "agent" then
+      out[#out + 1] = node
+    end
+  end
+  return out
+end
+
+--- Вывод завершённого вызова Bash узла `node`: `{ text, persisted }` или nil.
+function M.call_output(node)
+  local s = node and node.owner_pane and S.sessions[node.owner_pane]
+  if not s or not node.data then
+    return nil
+  end
+  return s.handle:call_output(node.data.id)
 end
 
 --- Корневые узлы по порядку (узлы, а не идентификаторы).
@@ -636,7 +825,8 @@ function M.children(id)
   return out
 end
 
---- Все узлы, удовлетворяющие `pred(node)` (без `pred` — все), в порядке обхода дерева.
+--- Все узлы, удовлетворяющие `pred(node)` (без `pred` — все), в порядке обхода дерева; за
+--- ними — панели без строк дерева (агенты вкладок, панели с Neovim) в порядке снимка.
 function M.find(pred)
   local out = {}
   local function walk(id)
@@ -653,6 +843,12 @@ function M.find(pred)
   end
   for _, id in ipairs(S.roots) do
     walk(id)
+  end
+  for _, p in ipairs(sorted(S.snapshot.panes or {}, "pane_id")) do
+    local node = present(p.pane_id) and S.hidden[p.pane_id]
+    if node and (not pred or pred(node)) then
+      out[#out + 1] = node
+    end
   end
   return out
 end
@@ -704,7 +900,10 @@ function M.visible(node)
   if M.show_finished() then
     return true
   end
-  if (node.kind == "subagent" or node.kind == "task") and node.state == "finished" then
+  if
+    (node.kind == "subagent" or node.kind == "task" or node.kind == "bash")
+    and node.state == "finished"
+  then
     for _, cid in ipairs(node.children) do
       if M.visible(S.nodes[cid]) then
         return true

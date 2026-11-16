@@ -28,7 +28,18 @@ local function env(on_model)
   local start = vim.uv.hrtime()
   local unsub = on_model and model.subscribe(on_model)
   local d = s.env(s.snapshot({ s.claude_pane("w1:p1", SAMPLE) }), SAMPLE, function()
-    u.big_transcript(s.fixtures.transcript(SAMPLE), s.fixtures.session_id(SAMPLE), 400, 8 * 1024)
+    -- узел команды показывается только с файлом вывода
+    vim.fn.mkdir(s.claude_dir .. "/tmp", "p")
+    local out = s.claude_dir .. "/tmp/bbig0001.output"
+    local f = assert(io.open(out, "w"))
+    f:close()
+    u.big_transcript(
+      s.fixtures.transcript(SAMPLE),
+      s.fixtures.session_id(SAMPLE),
+      400,
+      8 * 1024,
+      out
+    )
   end, { loaded = false })
   print(
     string.format(
@@ -80,7 +91,11 @@ describe("Асинхронное чтение и дерево", function()
       wait_loaded()
       local task = s.wait_node("w1:p1/bbig0001")
       t.eq(task.state, "finished")
-      t.eq(task.parent, "w1:p1")
+      t.eq(
+        task.parent,
+        "w1:t1",
+        "команда агента вкладки — под вкладкой"
+      )
     end
   )
 

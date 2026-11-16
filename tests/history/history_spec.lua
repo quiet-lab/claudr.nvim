@@ -275,10 +275,11 @@ describe("Вызов: действие дерева и подкоманда", fu
       stub_select()
       view.open()
       s.wait_node("w1:p1")
+      -- агент вкладки показан строкой вкладки (единственная вкладка — строкой workspace)
       t.wait(function()
-        return view.line_of("w1:p1") ~= nil
-      end, "строка панели")
-      view.focus("w1:p1")
+        return view.line_of("w1") ~= nil
+      end, "строка агента")
+      t.ok(view.focus("w1:p1"))
       t.ok(view.action("history"), "действие зарегистрировано")
       t.eq(view.action("history").key, history.KEY)
       vim.api.nvim_feedkeys(history.KEY, "x", false)
