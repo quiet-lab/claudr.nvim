@@ -30,10 +30,10 @@
 --              без него панель в фокусе, без неё первая; у workspace — то же для активной
 --              вкладки; у панели — она сама;
 --   phase_key  ключ часов строки (кадр анимации): у вкладки — панель её агента, иначе nil;
---   hidden     у панели без строки (агент вкладки, панель с Neovim) — true: такой узел
+--   hidden     у панели без строки (агент вкладки, панель с Neovim или оболочкой) — true: такой узел
 --              отдаёт `get`, но в дереве его нет.
 -- Строками дерева панели с агентом становятся, только если они не агент своей вкладки;
--- панели с Neovim на переднем плане строк не имеют (решение D58).
+-- панели с Neovim (решение D58) и простаивающей оболочкой (D67) на переднем плане строк не имеют.
 -- Идентификаторы: workspace, вкладка, панель — как в herdr; субагент, фоновая команда и
 -- вызов Bash — `<панель владельца>/<идентификатор субагента, задачи или вызова>`.
 local herdr = require("claudr.herdr")
@@ -484,6 +484,27 @@ local function is_nvim(p)
   return str(p.foreground_process) == "nvim"
 end
 
+-- Оболочка на переднем плане панели с командой: простаивающая оболочка строки не получает
+-- (решение D67). Ведущий `-` login-оболочки отбрасывается.
+local SHELLS = {
+  bash = true,
+  zsh = true,
+  fish = true,
+  sh = true,
+  dash = true,
+  ksh = true,
+  mksh = true,
+  tcsh = true,
+  csh = true,
+  nu = true,
+  xonsh = true,
+  elvish = true,
+}
+
+local function is_idle_shell(p)
+  return pane_kind(p) == "command" and SHELLS[(str(p.foreground_process):gsub("^%-", ""))] == true
+end
+
 -- Агент вкладки: панель с агентом в фокусе, иначе первая по номеру; nil — агента нет.
 local function tab_agent(panes)
   local first
@@ -645,7 +666,7 @@ local function build(snap)
         data = p,
       }
       local is_tab_agent = tab and tab.agent_pane == p.pane_id
-      if is_tab_agent or is_nvim(p) then
+      if is_tab_agent or is_nvim(p) or is_idle_shell(p) then
         node.hidden = true
         node.parent = parent
         node.children = {}

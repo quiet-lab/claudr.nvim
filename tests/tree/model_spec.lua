@@ -58,8 +58,18 @@ describe("Состав дерева", function()
         double.tab({ tab_id = "w1:t1", number = 1 }),
       },
       panes = {
-        double.pane({ pane_id = "w1:p3", tab_id = "w1:t1", number = 2 }),
-        double.pane({ pane_id = "w1:p2", tab_id = "w1:t1", number = 1 }),
+        double.pane({
+          pane_id = "w1:p3",
+          tab_id = "w1:t1",
+          number = 2,
+          foreground_process = "htop",
+        }),
+        double.pane({
+          pane_id = "w1:p2",
+          tab_id = "w1:t1",
+          number = 1,
+          foreground_process = "htop",
+        }),
         double.pane({ pane_id = "w1:p1", tab_id = "w1:t2" }),
       },
     })
@@ -427,7 +437,7 @@ describe("Завершённые узлы", function()
     local d = s.env(
       s.snapshot({
         s.claude_pane("w1:p1", "subagent-command"),
-        double.pane({ pane_id = "w1:p2" }),
+        double.pane({ pane_id = "w1:p2", foreground_process = "htop" }),
       }),
       "subagent-command"
     )
@@ -676,11 +686,83 @@ describe("Прочие агенты вкладки", function()
   end)
 end)
 
+describe("Панель с простаивающей оболочкой", function()
+  it("Вкладка с оболочкой", function()
+    s.env(
+      s.snapshot({
+        s.claude_pane("w1:p1", "owner-killed", { number = 1 }),
+        double.pane({ pane_id = "w1:p2", number = 2, foreground_process = "bash", cwd = "/src" }),
+      }),
+      "owner-killed"
+    )
+    s.wait_node("w1:p1/a0000000000000005")
+    t.ok(not vim.tbl_contains(s.children("w1:t1"), "w1:p2"), "строки оболочки нет")
+    local p2 = model.get("w1:p2")
+    t.eq(p2.hidden, true, "узел панели остаётся в модели")
+    t.eq(p2.pane_kind, "command")
+  end)
+
+  it("Вкладка с одной оболочкой", function()
+    s.env({
+      workspaces = { double.workspace({ workspace_id = "w1" }) },
+      tabs = {
+        double.tab({ tab_id = "w1:t1", number = 1 }),
+        double.tab({ tab_id = "w1:t2", number = 2 }),
+      },
+      panes = {
+        double.pane({ pane_id = "w1:p1", tab_id = "w1:t1", foreground_process = "htop" }),
+        double.pane({ pane_id = "w1:p3", tab_id = "w1:t2", foreground_process = "bash" }),
+      },
+    })
+    local tab = s.wait_node("w1:t2")
+    t.eq(tab.children, {}, "вкладка без дочерних строк")
+    t.eq(
+      model.pane_node(tab).id,
+      "w1:p3",
+      "вид вкладки — терминал её панели"
+    )
+  end)
+
+  it("login-оболочка и оболочки из перечня", function()
+    s.env(s.snapshot({
+      double.pane({ pane_id = "w1:p1", number = 1, foreground_process = "-bash" }),
+      double.pane({ pane_id = "w1:p2", number = 2, foreground_process = "zsh" }),
+      double.pane({ pane_id = "w1:p3", number = 3, foreground_process = "fish" }),
+      double.pane({ pane_id = "w1:p4", number = 4, foreground_process = "bashtop" }),
+    }))
+    s.wait_node("w1:p4")
+    t.eq(s.children("w1:t1"), { "w1:p4" })
+  end)
+
+  it("Команда запущена в оболочке", function()
+    local d = s.env(s.snapshot({
+      double.pane({ pane_id = "w1:p1", number = 1, foreground_process = "htop" }),
+      double.pane({ pane_id = "w1:p3", number = 2, foreground_process = "bash" }),
+    }))
+    s.wait_node("w1:p3")
+    t.eq(s.children("w1:t1"), { "w1:p1" })
+    local p = d:_pane("w1:p3")
+    p.foreground_process = "cargo"
+    d:emit("pane_updated", { pane = vim.deepcopy(p) })
+    s.wait_node("w1:p3", function(n)
+      return not n.hidden
+    end, "строка панели с командой")
+    t.eq(s.children("w1:t1"), { "w1:p1", "w1:p3" })
+    t.match(model.get("w1:p3").label, "cargo")
+    p.foreground_process = "bash"
+    d:emit("pane_updated", { pane = vim.deepcopy(p) })
+    s.wait_node("w1:p3", function(n)
+      return n.hidden == true
+    end, "строка панели ушла")
+    t.eq(s.children("w1:t1"), { "w1:p1" })
+  end)
+end)
+
 describe("Вкладка без агента", function()
   it("вид — панель в фокусе, без неё первая", function()
     s.env(s.snapshot({
-      double.pane({ pane_id = "w1:p1", number = 1 }),
-      double.pane({ pane_id = "w1:p4", number = 2, focused = true }),
+      double.pane({ pane_id = "w1:p1", number = 1, foreground_process = "htop" }),
+      double.pane({ pane_id = "w1:p4", number = 2, focused = true, foreground_process = "htop" }),
     }))
     local tab = s.wait_node("w1:t1")
     t.eq(tab.agent_pane, nil)

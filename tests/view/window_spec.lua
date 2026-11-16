@@ -20,7 +20,7 @@ local function env()
   local d = s.env(
     s.snapshot({
       s.claude_pane("w1:p1", "owner-dialogue"),
-      double.pane({ pane_id = "w1:p2", foreground_process = "bash" }),
+      double.pane({ pane_id = "w1:p2", foreground_process = "htop" }),
     }),
     { "owner-dialogue" }
   )
