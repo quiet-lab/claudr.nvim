@@ -146,10 +146,13 @@ describe("Диалог транскрипта — чтение порциями"
       return cancel
     end)
     cancel = true
-    u.settle()
+    -- открытие, `fstat` и закрытие идут через пул потоков libuv: число шагов цикла до
+    -- закрытия не задано, поэтому ожидание — до закрытия открытого дескриптора
+    t.wait(function()
+      return fds.opened == 1 and fds.live() == 0
+    end, "дескриптор открыт и закрыт")
     u.settle()
     t.eq(calls, 0)
-    t.eq(fds.live(), 0)
   end)
 end)
 
