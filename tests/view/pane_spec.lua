@@ -36,10 +36,10 @@ end
 
 -- Команда наблюдения: размер клиента — размер окна вида.
 local function observe_cmd(v, pane)
-  return ("terminal session observe --cols %d --rows %d %s"):format(
+  return ("terminal session observe %s --cols %d --rows %d"):format(
+    pane,
     vim.api.nvim_win_get_width(v.win),
-    vim.api.nvim_win_get_height(v.win),
-    pane
+    vim.api.nvim_win_get_height(v.win)
   )
 end
 

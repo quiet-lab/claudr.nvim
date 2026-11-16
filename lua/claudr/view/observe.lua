@@ -89,11 +89,12 @@ function M.open(node)
     "terminal",
     "session",
     "observe",
+    -- цель — первым аргументом: herdr разбирает ключи только после неё
+    pane_id,
     "--cols",
     tostring(vim.api.nvim_win_get_width(win)),
     "--rows",
     tostring(vim.api.nvim_win_get_height(win)),
-    pane_id,
   }, {
     env = { HERDR_SOCKET_PATH = herdr.socket_path() },
     stdout = function(_, data)

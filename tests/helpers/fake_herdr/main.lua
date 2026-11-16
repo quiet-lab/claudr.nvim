@@ -280,12 +280,20 @@ end
 -- Разбор подкоманды ----------------------------------------------------------------------
 
 if args[1] == "terminal" and args[2] == "session" and args[3] == "observe" then
-  -- `--cols N` и `--rows N` (размер клиента наблюдения) перед целью; кадры тестов несут свой размер
-  local i = 4
-  while args[i] == "--cols" or args[i] == "--rows" do
+  -- грамматика herdr: `observe <цель> [--cols N] [--rows N]`, ключ до цели — ошибка разбора;
+  -- кадры тестов несут свой размер
+  local target = args[4]
+  if not target or target:sub(1, 2) == "--" then
+    die("usage: herdr terminal session observe <target> [--cols N] [--rows N]", 2)
+  end
+  local i = 5
+  while args[i] do
+    if (args[i] ~= "--cols" and args[i] ~= "--rows") or not tonumber(args[i + 1]) then
+      die("unknown terminal session observe option: " .. args[i], 2)
+    end
     i = i + 2
   end
-  observe(args[i])
+  observe(target)
 elseif args[1] == "terminal" and args[2] == "attach" then
   attach(vim.list_slice(args, 3))
 else
