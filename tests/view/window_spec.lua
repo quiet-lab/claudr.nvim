@@ -311,3 +311,90 @@ describe("Ссылка на файл в виде", function()
     end
   )
 end)
+
+-- Enter на узле `id` в дереве, открытом из текущего окна (без смены буфера окна).
+local function enter(id)
+  tree_view.open()
+  t.ok(tree_view.focus(id), "узел показан в дереве")
+  press("<CR>")
+  return view.views()
+end
+
+local function find_view(kind, node_id)
+  for _, v in ipairs(view.views()) do
+    if v.kind == kind and v.node_id == node_id then
+      return v
+    end
+  end
+  return nil
+end
+
+describe("Замена вида в окне", function()
+  it(
+    "Enter на другом узле закрывает прежний вид окна",
+    function()
+      env()
+      local win_a = open_tree("w1:p2")
+      press("<CR>")
+      local v1 = s.track(find_view("observe", "w1:p2"))
+      t.ok(s.alive(v1.pid))
+      enter("w1:p1")
+      local v2 = s.track(find_view("observe", "w1:p1"))
+      s.wait_exit(v1, "прежнее наблюдение завершено")
+      t.ok(
+        not vim.api.nvim_buf_is_valid(v1.buf),
+        "буфер прежнего вида удалён"
+      )
+      t.eq(vim.api.nvim_win_get_buf(win_a), v2.buf, "новый вид в том же окне")
+      enter("w1:p2")
+      local v3 = s.track(find_view("observe", "w1:p2"))
+      s.wait_exit(v2, "наблюдение второго вида завершено")
+      t.eq(#view.views(), 1, "один вид")
+      t.ok(s.alive(v3.pid), "жив один процесс наблюдения")
+    end
+  )
+
+  it("Повторный Enter на узле с открытым видом", function()
+    env()
+    local win_a = open_tree("w1:p1")
+    press("<CR>")
+    local v = s.track(find_view("observe", "w1:p1"))
+    -- вкладка ведёт к той же панели агента: вид тот же
+    enter("w1:t1")
+    enter("w1:p1")
+    -- процесс наблюдения есть только у вида: один вид — один процесс
+    t.eq(#view.views(), 1, "второго вида и второго процесса нет")
+    t.ok(s.alive(v.pid))
+    t.eq(vim.api.nvim_win_get_buf(win_a), v.buf)
+  end)
+
+  it(
+    "Открытый вид, ушедший из окна, показывается снова",
+    function()
+      env()
+      local win_a = open_tree("w1:p2")
+      press("<CR>")
+      local v = s.track(find_view("observe", "w1:p2"))
+      -- файл в окне A: вид скрыт, но жив
+      vim.cmd("edit " .. vim.fn.fnameescape(project.short))
+      t.ok(s.alive(v.pid), "скрытый вид жив")
+      enter("w1:p2")
+      t.eq(vim.api.nvim_win_get_buf(win_a), v.buf, "тот же вид в окне A")
+      t.eq(#view.views(), 1)
+    end
+  )
+
+  it("Подключение с вводом не закрывается заменой", function()
+    env()
+    local win_a = open_tree("w1:p2")
+    press("i")
+    local av = s.track(find_view("attach", "w1:p2"))
+    t.ok(av, "подключение с вводом открыто")
+    vim.cmd("stopinsert")
+    enter("w1:p1")
+    local ov = s.track(find_view("observe", "w1:p1"))
+    t.eq(vim.api.nvim_win_get_buf(win_a), ov.buf)
+    t.ok(vim.api.nvim_buf_is_valid(av.buf), "буфер подключения жив")
+    t.ok(s.alive(av.pid), "подключение не оборвано")
+  end)
+end)

@@ -83,7 +83,21 @@ local function add_view_keys(v)
   return v
 end
 
---- Открывает вид узла по его виду. Возвращает вид или nil.
+-- Вид каждого вида узла, открываемый по Enter.
+local OPEN_KIND = { pane = "observe", subagent = "subagent", task = "task", bash = "bash" }
+
+-- Уже открытый вид узла `node` (того вида, который открывает Enter) или nil.
+local function open_view_of(node)
+  for _, v in ipairs(window.list()) do
+    if not v.released and v.node_id == node.id and v.kind == OPEN_KIND[node.kind] then
+      return v
+    end
+  end
+  return nil
+end
+
+--- Открывает вид узла по его виду; вид узла, который уже открыт, показывается снова
+--- (решение D68). Возвращает вид или nil.
 function M.open(node)
   local v
   if node.kind == "tab" or node.kind == "workspace" then
@@ -93,6 +107,11 @@ function M.open(node)
       return nil
     end
     node = pane
+  end
+  local opened = open_view_of(node)
+  if opened then
+    opened.win = window.open_view(opened.buf)
+    return opened
   end
   if node.kind == "pane" then
     v = require("claudr.view.observe").open(node)

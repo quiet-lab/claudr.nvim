@@ -1,7 +1,8 @@
 -- Общее устройство видов узлов: обычный буфер в окне, из которого открыто дерево (решения
 -- D50, D51), учёт открытых видов и их освобождение. Вид освобождается (процесс завершается,
 -- наблюдение закрывается) при удалении буфера и при закрытии окна, в котором он показан;
--- уход из буфера (например, `gd` на ссылке) вид не освобождает, `<C-o>` возвращает в него.
+-- уход из буфера в файл (например, `gd` на ссылке) вид не освобождает, `<C-o>` возвращает в
+-- него, а новый вид в окне закрывает прежний вид окна, кроме подключения с вводом (D68).
 -- Плавающее окно (`open_float`) остаётся окнам, которые не виды узлов: буфер диалога агента.
 -- Таймеров нет.
 local M = {}
@@ -107,12 +108,27 @@ local VIEW_WINDOW_OPTIONS = {
   colorcolumn = "",
 }
 
+-- Закрывает вид `prev`, вытесненный из окна буфером `buf`: только если это другой вид, не
+-- подключение с вводом (его терминал принимает ввод пользователя и закрывается только явно) и
+-- его буфер больше нигде не показан. Окно уже показывает `buf`, поэтому остаётся на месте.
+local function replace(prev, buf)
+  if not prev or prev.released or prev.buf == buf or prev.kind == "attach" then
+    return
+  end
+  if not vim.api.nvim_buf_is_valid(prev.buf) or #vim.fn.win_findbuf(prev.buf) > 0 then
+    return
+  end
+  pcall(vim.api.nvim_buf_delete, prev.buf, { force = true })
+end
+
 --- Показывает буфер вида `buf` в окне `M.target_window()` (без него — в новом окне справа
 --- от дерева), делает окно текущим и записывает уход из прежнего буфера в список переходов.
 --- Буфер не удаляется при уходе из окна: `<C-o>` возвращает в вид. Возвращает окно.
 function M.open_view(buf, opts)
   opts = opts or {}
   local win = M.target_window()
+  -- прежний вид окна заменяется новым (решение D68): после показа нового буфера он закрывается
+  local prev = win and views[vim.api.nvim_win_get_buf(win)]
   if not win then
     vim.cmd("rightbelow vertical new")
     win = vim.api.nvim_get_current_win()
@@ -134,6 +150,7 @@ function M.open_view(buf, opts)
     end
   end
   vim.bo[buf].bufhidden = "hide"
+  replace(prev, buf)
   for name, value in pairs(VIEW_WINDOW_OPTIONS) do
     vim.api.nvim_set_option_value(name, value, { scope = "local", win = win })
   end
